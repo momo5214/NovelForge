@@ -14,7 +14,6 @@ if TYPE_CHECKING:
 from app.db.models import CardType
 from app.schemas.response_registry import RESPONSE_MODEL_MAP
 from app.services.ai.core.model_builder import build_model_from_json_schema
-from app.services.ai.core.llm_service import generate_structured
 from ...expressions.evaluator import evaluate_expression
 from ...registry import register_node
 from ..base import BaseNode
@@ -163,6 +162,8 @@ class SequentialStructuredNode(BaseNode[SequentialStructuredInput, SequentialStr
                 )
 
                 logger.info(f"[SequentialStructured] Item {index}: 开始 LLM 调用")
+                from app.services.ai.core.llm_service import generate_structured
+
                 generated = await generate_structured(
                     session=self.context.session,
                     llm_config_id=inputs.llm_config_id,

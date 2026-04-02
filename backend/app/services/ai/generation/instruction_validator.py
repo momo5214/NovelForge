@@ -306,7 +306,45 @@ def validate_instruction(instruction: Dict[str, Any], schema: Dict[str, Any]) ->
             if expected_type == 'object':
                 validate_schema_structure(value, actual_schema, schema)
 
-def validate_schema_structure(data: Any, schema_node: Dict[str, Any], root_schema: Dict[str, Any]) -> None:
+def _validate_scalar_constraints(value: Any, field_schema: Dict[str, Any], expected_type: Optional[str], path: str) -> None:
+    """Validate enum/length/range constraints for a single field value."""
+    if 'enum' in field_schema and value not in field_schema['enum']:
+        raise ValueError(
+            f"字段 {path} 的值不在枚举范围内：{field_schema['enum']}"
+        )
+
+    if expected_type in ['integer', 'number']:
+        if 'minimum' in field_schema and value < field_schema['minimum']:
+            raise ValueError(
+                f"字段 {path} 的值 {value} 小于最小值 {field_schema['minimum']}"
+            )
+        if 'maximum' in field_schema and value > field_schema['maximum']:
+            raise ValueError(
+                f"字段 {path} 的值 {value} 大于最大值 {field_schema['maximum']}"
+            )
+
+    if expected_type == 'string':
+        if 'minLength' in field_schema and len(value) < field_schema['minLength']:
+            raise ValueError(
+                f"字段 {path} 的长度 {len(value)} 小于最小长度 {field_schema['minLength']}"
+            )
+        if 'maxLength' in field_schema and len(value) > field_schema['maxLength']:
+            raise ValueError(
+                f"字段 {path} 的长度 {len(value)} 大于最大长度 {field_schema['maxLength']}"
+            )
+
+    if expected_type == 'array' and isinstance(value, list):
+        if 'minItems' in field_schema and len(value) < field_schema['minItems']:
+            raise ValueError(
+                f"数组 {path} 的长度 {len(value)} 小于最小长度 {field_schema['minItems']}"
+            )
+        if 'maxItems' in field_schema and len(value) > field_schema['maxItems']:
+            raise ValueError(
+                f"数组 {path} 的长度 {len(value)} 大于最大长度 {field_schema['maxItems']}"
+            )
+
+
+def validate_schema_structure(data: Any, schema_node: Dict[str, Any], root_schema: Dict[str, Any], path: str = "") -> None:
     """递归校验数据的结构是否符合 Schema 定义 (包含 required 和 properties)
     
     Args:
@@ -333,6 +371,7 @@ def validate_schema_structure(data: Any, schema_node: Dict[str, Any], root_schem
         
         for field_name, field_schema_ref in properties.items():
             field_schema = resolve_schema(field_schema_ref, root_schema)
+            field_path = f"{path}/{field_name}" if path else f"/{field_name}"
             
             # A. 处理缺失字段
             if field_name not in data:
@@ -341,7 +380,7 @@ def validate_schema_structure(data: Any, schema_node: Dict[str, Any], root_schem
                     data[field_name] = field_schema['default']
                 # 如果没默认值 且 是必填项，报错
                 elif field_name in required_fields:
-                    raise ValueError(f"缺少必填字段: {field_name}")
+                    raise ValueError(f"缺少必填字段: {field_path}")
                 # 既没默认值也不是必填，跳过
                 continue
             
@@ -357,57 +396,17 @@ def validate_schema_structure(data: Any, schema_node: Dict[str, Any], root_schem
             if expected_type and not validate_type(field_value, expected_type):
                  # 宽容处理：尝试转换类型? 目前先报错，交给 AI 修复
                  # (后续可以考虑添加自动类型转换逻辑)
-                 raise ValueError(f"字段 {field_name} 类型错误: 期望 {expected_type}, 实际 {type(field_value).__name__}")
-            
+                 raise ValueError(f"字段 {field_path} 类型错误: 期望 {expected_type}, 实际 {type(field_value).__name__}")
+
             # 深度递归
             if expected_type == 'object':
-                 validate_schema_structure(field_value, field_schema, root_schema)
+                 validate_schema_structure(field_value, field_schema, root_schema, field_path)
+
+            _validate_scalar_constraints(field_value, field_schema, expected_type, field_path)
     
     # 2. (可选) 检查 data 中有多余的字段? (additionalProperties)
     # 目前暂不严格限制，允许 AI 生成额外字段作为"思考备注"或未定义属性
 
-
-    
-    # 3. 约束校验
-    # 枚举约束
-    if 'enum' in field_schema and value not in field_schema['enum']:
-        raise ValueError(
-            f"字段 {path} 的值不在枚举范围内：{field_schema['enum']}"
-        )
-    
-    # 数值范围约束
-    if expected_type in ['integer', 'number']:
-        if 'minimum' in field_schema and value < field_schema['minimum']:
-            raise ValueError(
-                f"字段 {path} 的值 {value} 小于最小值 {field_schema['minimum']}"
-            )
-        if 'maximum' in field_schema and value > field_schema['maximum']:
-            raise ValueError(
-                f"字段 {path} 的值 {value} 大于最大值 {field_schema['maximum']}"
-            )
-    
-    # 字符串长度约束
-    if expected_type == 'string':
-        if 'minLength' in field_schema and len(value) < field_schema['minLength']:
-            raise ValueError(
-                f"字段 {path} 的长度 {len(value)} 小于最小长度 {field_schema['minLength']}"
-            )
-        if 'maxLength' in field_schema and len(value) > field_schema['maxLength']:
-            raise ValueError(
-                f"字段 {path} 的长度 {len(value)} 大于最大长度 {field_schema['maxLength']}"
-            )
-    
-    # 数组长度约束
-    if expected_type == 'array':
-        if isinstance(value, list):
-            if 'minItems' in field_schema and len(value) < field_schema['minItems']:
-                raise ValueError(
-                    f"数组 {path} 的长度 {len(value)} 小于最小长度 {field_schema['minItems']}"
-                )
-            if 'maxItems' in field_schema and len(value) > field_schema['maxItems']:
-                raise ValueError(
-                    f"数组 {path} 的长度 {len(value)} 大于最大长度 {field_schema['maxItems']}"
-                )
 
 
 def apply_instruction(data: Dict[str, Any], instruction: Dict[str, Any]) -> None:

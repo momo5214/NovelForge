@@ -20,6 +20,22 @@ class TriggerCardSavedInput(BaseModel):
         True,
         description="是否在卡片更新时触发"
     )
+    step: Optional[int] = Field(
+        None,
+        description="步骤号过滤。适用于内容中带 step 字段的卡片，如小说架构步骤。留空则不按步骤过滤"
+    )
+    title: Optional[str] = Field(
+        None,
+        description="卡片标题过滤。留空则不按标题过滤"
+    )
+    prompt_name: Optional[str] = Field(
+        None,
+        description="content.prompt_name 过滤。留空则不按提示词名过滤"
+    )
+    step_name: Optional[str] = Field(
+        None,
+        description="content.step_name 过滤。留空则不按步骤名过滤"
+    )
 
 
 class TriggerCardSavedOutput(BaseModel):
@@ -28,6 +44,10 @@ class TriggerCardSavedOutput(BaseModel):
     project_id: int = Field(..., description="项目ID")
     card_type: Optional[str] = Field(None, description="卡片类型名称")
     is_created: bool = Field(..., description="是否是新创建的卡片（true=创建，false=更新）")
+    step: Optional[int] = Field(None, description="步骤号（若事件卡片内容中存在 step 字段）")
+    title: Optional[str] = Field(None, description="卡片标题")
+    prompt_name: Optional[str] = Field(None, description="content.prompt_name")
+    step_name: Optional[str] = Field(None, description="content.step_name")
 
 
 @register_node
@@ -93,5 +113,9 @@ class TriggerCardSavedNode(BaseNode):
             card_id=trigger_data.get("card_id"),
             project_id=trigger_data.get("project_id"),
             card_type=card_type,
-            is_created=trigger_data.get("is_created", False)
+            is_created=trigger_data.get("is_created", False),
+            step=trigger_data.get("step", inputs.step),
+            title=trigger_data.get("title", inputs.title),
+            prompt_name=trigger_data.get("prompt_name", inputs.prompt_name),
+            step_name=trigger_data.get("step_name", inputs.step_name),
         )

@@ -13,6 +13,53 @@ from sqlalchemy import update as sa_update
 
 logger = logging.getLogger(__name__)
 
+
+ARCHITECTURE_STEP_PROMPTS: dict[int, str] = {
+    1: "ANG.M0.architecture_step1_mission",
+    2: "ANG.M0.architecture_step2_worldview",
+    3: "ANG.M0.architecture_step3_plot",
+    4: "ANG.M0.architecture_step4_character",
+    5: "ANG.M0.architecture_step5_style",
+}
+
+ARCHITECTURE_STEP_NAMES: dict[int, str] = {
+    1: "分卷使命宣言",
+    2: "世界观与冲突发生器",
+    3: "情节线与推进机制",
+    4: "核心角色规划",
+    5: "叙事风格与文本策略",
+}
+
+ARCHITECTURE_STEP_CONTEXT_TEMPLATES: dict[int, str] = {
+    1: "作品标签: @作品标签.content\n故事大纲: @故事大纲.content.overview",
+    2: (
+        "作品标签: @作品标签.content\n"
+        "故事大纲: @故事大纲.content.overview\n"
+        "步骤1结果: @type:小说架构步骤[index=1].content.content"
+    ),
+    3: (
+        "作品标签: @作品标签.content\n"
+        "故事大纲: @故事大纲.content.overview\n"
+        "步骤1结果: @type:小说架构步骤[index=1].content.content\n"
+        "步骤2结果: @type:小说架构步骤[index=2].content.content"
+    ),
+    4: (
+        "作品标签: @作品标签.content\n"
+        "故事大纲: @故事大纲.content.overview\n"
+        "步骤1结果: @type:小说架构步骤[index=1].content.content\n"
+        "步骤2结果: @type:小说架构步骤[index=2].content.content\n"
+        "步骤3结果: @type:小说架构步骤[index=3].content.content"
+    ),
+    5: (
+        "作品标签: @作品标签.content\n"
+        "故事大纲: @故事大纲.content.overview\n"
+        "步骤1结果: @type:小说架构步骤[index=1].content.content\n"
+        "步骤2结果: @type:小说架构步骤[index=2].content.content\n"
+        "步骤3结果: @type:小说架构步骤[index=3].content.content\n"
+        "步骤4结果: @type:小说架构步骤[index=4].content.content"
+    ),
+}
+
 # 每类动态信息的建议上限（超过则保留更重要/较新者）。可按需调整。
 MAX_ITEMS_BY_TYPE: dict[str, int] = {
     "心理想法/目标快照": 3,
@@ -109,6 +156,38 @@ def _generate_non_conflicting_title(db: Session, project_id: int, base_title: st
             except Exception:
                 continue
     return f"{title}({max_n + 1})"
+
+
+def _merge_architecture_step_content(card: Card, content_update: Optional[dict]) -> Optional[dict]:
+    """保存小说架构步骤时保留隐藏系统字段，避免前端表单覆盖掉元数据。"""
+    if not isinstance(content_update, dict):
+        return content_update
+
+    card_type = getattr(card, "card_type", None)
+    card_type_name = getattr(card_type, "name", None) if card_type else None
+    if card_type_name != "小说架构步骤":
+        return content_update
+
+    existing_content = card.content if isinstance(card.content, dict) else {}
+    merged = dict(content_update)
+
+    for field in ("step", "step_name", "prompt_name", "ai_context_template"):
+        if merged.get(field) is None and existing_content.get(field) is not None:
+            merged[field] = existing_content.get(field)
+
+    raw_step = merged.get("step")
+    try:
+        step = int(raw_step) if raw_step is not None and str(raw_step).strip() != "" else None
+    except Exception:
+        step = None
+
+    if step in ARCHITECTURE_STEP_NAMES:
+        merged.setdefault("step", step)
+        merged.setdefault("step_name", ARCHITECTURE_STEP_NAMES[step])
+        merged.setdefault("prompt_name", ARCHITECTURE_STEP_PROMPTS[step])
+        merged.setdefault("ai_context_template", ARCHITECTURE_STEP_CONTEXT_TEMPLATES[step])
+
+    return merged
 
 
 class CardService:
@@ -242,6 +321,8 @@ class CardService:
             return None
             
         update_data = card_update.model_dump(exclude_unset=True)
+        if "content" in update_data:
+            update_data["content"] = _merge_architecture_step_content(card, update_data.get("content"))
 
         # 如果parent_id改变了，我们需要更新display_order
         if 'parent_id' in update_data and card.parent_id != update_data['parent_id']:

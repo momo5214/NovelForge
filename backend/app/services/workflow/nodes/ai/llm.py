@@ -10,7 +10,6 @@ from loguru import logger
 
 from ...registry import register_node
 from ..base import BaseNode
-from app.services.ai.core.chat_model_factory import build_chat_model
 from langchain_core.messages import HumanMessage, SystemMessage
 
 
@@ -114,6 +113,8 @@ class LLMGenerateNode(BaseNode[LLMInput, LLMOutput]):
         
         # 构建 ChatModel (在重试循环外,避免重复构建)
         try:
+            from app.services.ai.core.chat_model_factory import build_chat_model
+
             model = build_chat_model(
                 session=self.context.session,
                 llm_config_id=input_data.llm_config_id,

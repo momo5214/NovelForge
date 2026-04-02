@@ -329,6 +329,11 @@ class WorkflowParser:
             return f"${node.id}"
         if isinstance(node, ast.Attribute):
             obj = self._parse_value(node.value)
+            # 如果上层已经被编码为表达式引用（${...}），则把属性访问折叠进同一个表达式里。
+            # 这样可避免生成 "${expr}.attr" 这种无法被执行器正确解析的混合引用。
+            if isinstance(obj, str) and obj.startswith("${") and obj.endswith("}"):
+                inner_expr = obj[2:-1]
+                return f"${{{inner_expr}.{node.attr}}}"
             return f"{obj}.{node.attr}"
         if isinstance(node, ast.List):
             return [self._parse_value(elt) for elt in node.elts]

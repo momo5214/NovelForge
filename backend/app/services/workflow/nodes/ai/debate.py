@@ -14,7 +14,6 @@ if TYPE_CHECKING:
 
 from ...registry import register_node
 from ..base import BaseNode
-from app.services.ai.core.llm_service import generate_structured
 
 
 # ============================================================
@@ -213,6 +212,8 @@ class DebateNode(BaseNode[DebateInput, DebateOutput]):
             user_prompt = "\n\n".join(context)
             
             # 使用 generate_structured 函数（包含配额管理、重试、token 统计）
+            from app.services.ai.core.llm_service import generate_structured
+
             response = await generate_structured(
                 session=self.context.session,
                 llm_config_id=llm_config_id,

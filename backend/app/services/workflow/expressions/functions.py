@@ -10,7 +10,20 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
-from typing import Any, Callable, Dict
+from typing import Any, Callable, Dict, List
+
+from app.services.foreshadow_parser import (
+    build_foreshadow_register_payload,
+    build_foreshadow_processing_vars,
+    build_open_foreshadow_ledger,
+    extract_foreshadow_ids,
+    foreshadow_lifecycle_gate,
+    normalize_foreshadow_plan,
+)
+from app.services.chapter_candidate_character_service import (
+    build_candidate_character_content_update,
+)
+from app.services.chapter_postprocess_service import build_character_state_update_from_summary
 
 
 _HELPER_REGISTRY: Dict[str, Callable[..., Any]] = {}
@@ -60,6 +73,51 @@ def get_helper_metadata() -> Dict[str, HelperMeta]:
     return _HELPER_META_REGISTRY.copy()
 
 
+def _normalize_text(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def _get_card_content(card: Any) -> Dict[str, Any]:
+    if isinstance(card, dict):
+        content = card.get("content") or {}
+        if isinstance(content, dict):
+            return content
+    return {}
+
+
+def _get_character_standard_name(card: Any) -> str:
+    content = _get_card_content(card)
+    return str(content.get("name") or (card.get("title") if isinstance(card, dict) else "") or "").strip()
+
+
+def _find_last_position_text(content: Dict[str, Any]) -> str:
+    tracks = content.get("position_tracks") or []
+    if not isinstance(tracks, list) or not tracks:
+        return ""
+    item = tracks[-1] or {}
+    location = str(item.get("location") or "").strip()
+    chapter_number = str(item.get("chapter_number") or "").strip()
+    if location and chapter_number:
+        return f"第{chapter_number}章位于{location}"
+    return location
+
+
+def _find_last_event_text(content: Dict[str, Any]) -> str:
+    events = content.get("key_event_records") or []
+    if not isinstance(events, list) or not events:
+        return ""
+    item = events[-1] or {}
+    chapter_number = str(item.get("chapter_number") or "").strip()
+    event_type = str(item.get("event_type") or "").strip()
+    summary = str(item.get("summary") or "").strip()
+    prefix = ""
+    if chapter_number:
+        prefix += f"第{chapter_number}章"
+    if event_type:
+        prefix += f"[{event_type}]"
+    return (prefix + summary).strip()
+
+
 @register_function(
     "default",
     summary="当 value 为 None 时返回默认值",
@@ -70,6 +128,197 @@ def get_helper_metadata() -> Dict[str, HelperMeta]:
 def fn_default(value: Any, default_value: Any) -> Any:
     """当 value 为 None 时返回默认值"""
     return value if value is not None else default_value
+
+
+@register_function(
+    "resolve_character_targets",
+    summary="基于章节实体名单和正文内容，解析本章应处理的已有角色标准名",
+    scenario="章节生成/后处理角色状态更新前的目标角色收口",
+    priority=96,
+    example="resolve_character_targets(card.content.entity_list, chapter_text, character_cards.cards)",
+)
+def fn_resolve_character_targets(
+    entity_list: Any,
+    chapter_text: Any,
+    character_cards: Any,
+    *,
+    limit: int = 8,
+) -> List[str]:
+    """从章节实体名单与正文内容中收口本章已有角色标准名。"""
+    if not isinstance(character_cards, list):
+        return []
+
+    alias_map: Dict[str, str] = {}
+    ordered_cards: List[Dict[str, Any]] = []
+    for card in character_cards:
+        if not isinstance(card, dict):
+            continue
+        content = _get_card_content(card)
+        standard_name = _get_character_standard_name(card)
+        if not standard_name:
+            continue
+        ordered_cards.append(card)
+        alias_map[_normalize_text(standard_name)] = standard_name
+        for alias in content.get("aliases") or []:
+            normalized = _normalize_text(alias)
+            if normalized:
+                alias_map[normalized] = standard_name
+
+    resolved: List[str] = []
+    seen: set[str] = set()
+
+    def _append(name: str) -> None:
+        normalized = _normalize_text(name)
+        if not normalized or normalized in seen:
+            return
+        seen.add(normalized)
+        resolved.append(name)
+
+    for item in entity_list or []:
+        standard_name = alias_map.get(_normalize_text(item))
+        if standard_name:
+            _append(standard_name)
+        if len(resolved) >= limit:
+            return resolved[:limit]
+
+    chapter_text_str = str(chapter_text or "")
+    if chapter_text_str and len(resolved) < limit:
+        for card in ordered_cards:
+            standard_name = _get_character_standard_name(card)
+            content = _get_card_content(card)
+            candidate_tokens = [standard_name, *(content.get("aliases") or [])]
+            if any(str(token or "").strip() and str(token).strip() in chapter_text_str for token in candidate_tokens):
+                _append(standard_name)
+            if len(resolved) >= limit:
+                break
+
+    return resolved[:limit]
+
+
+@register_function(
+    "build_character_match_payload",
+    summary="把角色标准名列表转换为角色库同步节点可直接使用的匹配载荷",
+    scenario="在无需新角色识别时驱动角色库同步",
+    priority=90,
+    example="build_character_match_payload(['林澈', '沈清禾'])",
+)
+def fn_build_character_match_payload(target_names: Any) -> Dict[str, Any]:
+    """将目标角色名列表包装成角色库同步节点输入。"""
+    names = [str(name or "").strip() for name in (target_names or []) if str(name or "").strip()]
+    return {
+        "existing_matches": [
+            {
+                "observed_name": name,
+                "matched_name": name,
+                "aliases": [],
+            }
+            for name in names
+        ],
+        "new_characters": [],
+    }
+
+
+@register_function(
+    "build_character_state_reference",
+    summary="为目标角色生成紧凑的当前状态参考摘要",
+    scenario="角色状态结构化提取前缩小上下文",
+    priority=94,
+    example="build_character_state_reference(character_cards.cards, ['林澈'])",
+)
+def fn_build_character_state_reference(character_cards: Any, target_names: Any) -> str:
+    """按角色标准名生成轻量状态参考文本。"""
+    if not isinstance(character_cards, list):
+        return ""
+
+    target_name_set = {
+        _normalize_text(name) for name in (target_names or [])
+        if _normalize_text(name)
+    }
+    if not target_name_set:
+        return ""
+
+    lines: List[str] = []
+    for card in character_cards:
+        if not isinstance(card, dict):
+            continue
+        content = _get_card_content(card)
+        standard_name = _get_character_standard_name(card)
+        if _normalize_text(standard_name) not in target_name_set:
+            continue
+
+        aliases = [str(alias or "").strip() for alias in (content.get("aliases") or []) if str(alias or "").strip()]
+        line_parts = [
+            f"角色名：{standard_name}",
+            f"角色编号：{str(content.get('character_code') or '未编号')}",
+            f"角色类型：{str(content.get('role_type') or '')}",
+            f"角色权重：{str(content.get('role_weight') or '')}",
+            f"角色层级：{str(content.get('role_tier') or '')}",
+            f"身份：{str(content.get('identity') or '')}",
+            f"角色概述：{str(content.get('description') or '')}",
+        ]
+        if aliases:
+            line_parts.append("其他称谓：" + "、".join(aliases))
+
+        last_position = _find_last_position_text(content)
+        if last_position:
+            line_parts.append("最近位置：" + last_position)
+
+        last_event = _find_last_event_text(content)
+        if last_event:
+            line_parts.append("最近事件：" + last_event)
+
+        life_state = content.get("life_state") or {}
+        if isinstance(life_state, dict):
+            physical = str(life_state.get("physical_state") or "").strip()
+            psychological = str(life_state.get("psychological_state") or "").strip()
+            if physical or psychological:
+                line_parts.append(f"生命状态：身体={physical or '无'}；心理={psychological or '无'}")
+
+        lines.append("\n".join([part for part in line_parts if str(part).strip()]))
+
+    return "\n\n".join(lines)
+
+
+@register_function(
+    "build_character_state_update_from_summary",
+    summary="把角色状态摘要转换成角色卡写回载荷",
+    scenario="章节后处理的角色状态摘要提取完成后，本地映射为 UpdateCharacterState",
+    priority=93,
+    example="build_character_state_update_from_summary(summary_extract.data, volume_number=1, chapter_number=3)",
+)
+def fn_build_character_state_update_from_summary(
+    summary_data: Any,
+    *,
+    volume_number: int,
+    chapter_number: int,
+) -> Dict[str, Any]:
+    return build_character_state_update_from_summary(
+        summary_data,
+        volume_number=int(volume_number),
+        chapter_number=int(chapter_number),
+    )
+
+
+@register_function(
+    "build_candidate_character_content_update",
+    summary="把章节角色规划结果整理成章节候选角色字段和 entity_list 写回内容",
+    scenario="章节草稿前候选角色准备",
+    priority=92,
+    example="build_candidate_character_content_update(target.content, character_planning.data, character_cards.cards)",
+)
+def fn_build_candidate_character_content_update(
+    content: Any,
+    planning_result: Any,
+    official_character_cards: Any,
+    *,
+    updated_at: Any = None,
+) -> Dict[str, Any]:
+    return build_candidate_character_content_update(
+        content=content if isinstance(content, dict) else {},
+        planning_result=planning_result or {},
+        official_character_cards=official_character_cards or [],
+        updated_at=str(updated_at) if updated_at is not None else None,
+    )
 
 
 @register_function(
@@ -355,3 +604,95 @@ def fn_squash_adjacent_stages(
         squashed.append(cur)
 
     return squashed
+
+
+@register_function(
+    "normalize_foreshadow_plan",
+    summary="把旧版伏笔条目或结构化条目统一整理成稳定对象列表",
+    scenario="增强章节大纲/伏笔治理前预处理",
+    priority=98,
+    example="normalize_foreshadow_plan(outline.content.foreshadow_plan_items or outline.content.foreshadow_items)",
+)
+def fn_normalize_foreshadow_plan(items: Any) -> list[dict[str, Any]]:
+    return normalize_foreshadow_plan(items)
+
+
+@register_function(
+    "extract_foreshadow_ids",
+    summary="从伏笔条目列表中提取稳定伏笔编号",
+    scenario="伏笔历史检索与同步",
+    priority=94,
+    example="extract_foreshadow_ids(outline.content.foreshadow_items)",
+)
+def fn_extract_foreshadow_ids(items: Any) -> list[str]:
+    return extract_foreshadow_ids(items)
+
+
+@register_function(
+    "foreshadow_lifecycle_gate",
+    summary="检查当前章节是否响应了所有到期未回收伏笔",
+    scenario="章节生成/后处理前的伏笔门禁",
+    priority=99,
+    example="foreshadow_lifecycle_gate(chapter_no, ledger_text, planned_items).get('allow')",
+)
+def fn_foreshadow_lifecycle_gate(chapter_number: Any, ledger_text: Any, planned_items: Any) -> dict[str, Any]:
+    return foreshadow_lifecycle_gate(chapter_number, ledger_text, planned_items)
+
+
+@register_function(
+    "build_foreshadow_register_payload",
+    summary="根据伏笔治理报告生成伏笔登记载荷",
+    scenario="ForeshadowItem 同步",
+    priority=96,
+    example="build_foreshadow_register_payload(ids_text, report_text, chapter_id, chapter_no)",
+)
+def fn_build_foreshadow_register_payload(
+    foreshadow_ids_text: Any,
+    report_text: Any,
+    chapter_id: Any = None,
+    current_chapter_number: Any = None,
+) -> list[dict[str, Any]]:
+    return build_foreshadow_register_payload(
+        foreshadow_ids_text=foreshadow_ids_text,
+        report_text=report_text,
+        chapter_id=chapter_id,
+        current_chapter_number=current_chapter_number,
+    )
+
+
+@register_function(
+    "build_foreshadow_processing_vars",
+    summary="构建伏笔治理所需的标准变量字典",
+    scenario="增强章节闭环/后处理闭环",
+    priority=97,
+    example="build_foreshadow_processing_vars(chapter_no, chapter_id, title, blueprint, chapter_text, ledger, planned_items)",
+)
+def fn_build_foreshadow_processing_vars(
+    chapter_number: Any,
+    chapter_id: Any,
+    chapter_title: Any,
+    chapter_blueprint: Any,
+    chapter_text: Any,
+    existing_ledger: Any,
+    planned_items: Any,
+) -> dict[str, Any]:
+    return build_foreshadow_processing_vars(
+        chapter_number=chapter_number,
+        chapter_id=chapter_id,
+        chapter_title=chapter_title,
+        chapter_blueprint=chapter_blueprint,
+        chapter_text=chapter_text,
+        existing_ledger=existing_ledger,
+        planned_items=planned_items,
+    )
+
+
+@register_function(
+    "build_open_foreshadow_ledger",
+    summary="从伏笔治理报告中过滤出未回收台账文本",
+    scenario="更新伏笔管理/未回收台账",
+    priority=93,
+    example="build_open_foreshadow_ledger(report_text)",
+)
+def fn_build_open_foreshadow_ledger(report_text: Any) -> str:
+    return build_open_foreshadow_ledger(report_text)

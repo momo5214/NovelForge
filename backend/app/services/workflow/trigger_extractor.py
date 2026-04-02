@@ -17,7 +17,7 @@ def extract_triggers_from_code(code: str) -> List[Dict[str, Any]]:
           参数: template (可选)
           
         - Trigger.CardSaved: 卡片保存触发器
-          参数: card_type (可选), on_create (默认false), on_update (默认true)
+          参数: card_type/title/prompt_name/step_name (可选), on_create (默认false), on_update (默认true), step (可选)
     
     Args:
         code: 工作流代码（注释标记 DSL）
@@ -86,6 +86,14 @@ def extract_triggers_from_code(code: str) -> List[Dict[str, Any]]:
                 # 提取 card_type 参数
                 if "card_type" in config and config["card_type"]:
                     match["card_type"] = config["card_type"]
+                if "title" in config and config["title"]:
+                    match["title"] = config["title"]
+                if "prompt_name" in config and config["prompt_name"]:
+                    match["prompt_name"] = config["prompt_name"]
+                if "step_name" in config and config["step_name"]:
+                    match["step_name"] = config["step_name"]
+                if "step" in config and config["step"] is not None:
+                    match["step"] = config["step"]
                 # 提取 on_create 和 on_update 参数
                 # 默认值需与 TriggerCardSavedInput 保持一致：on_create=False, on_update=True
                 on_create = bool(config.get("on_create", False))

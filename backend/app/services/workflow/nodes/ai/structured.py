@@ -15,7 +15,6 @@ from ...registry import register_node
 from ..base import BaseNode
 from app.services import prompt_service
 from app.services.ai.core.model_builder import build_model_from_json_schema
-from app.services.ai.core.llm_service import generate_structured
 from app.services.schema_service import compose_full_schema
 from app.db.models import CardType
 from app.schemas.response_registry import RESPONSE_MODEL_MAP
@@ -116,6 +115,8 @@ class StructuredGenerateNode(BaseNode[StructuredGenerateInput, StructuredGenerat
                 f"WorkflowStructured_{inputs.response_model_id}",
                 full_schema,
             )
+            from app.services.ai.core.llm_service import generate_structured
+
             generated = await generate_structured(
                 session=session,
                 llm_config_id=inputs.llm_config_id,

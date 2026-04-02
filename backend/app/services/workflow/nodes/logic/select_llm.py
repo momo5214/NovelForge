@@ -72,6 +72,15 @@ class SelectLLMNode(BaseNode[SelectLLMInput, SelectLLMOutput]):
                 elif len(matches) > 1:
                     raise ValueError(f"模型名匹配到多个候选: {inputs.llm_name}")
 
+        if config is None and inputs.llm_config_id is None and not inputs.llm_name:
+            # 默认选择第一个可用配置。
+            # 经验上某些 openai_compatible 代理会对部分 model 返回 502（unknown provider）。
+            # 这里做一个最小的启发式过滤：优先跳过 model_name 为 gpt-5.4 的配置。
+            all_rows = session.exec(select(LLMConfig).order_by(LLMConfig.id)).all()
+            config = next((row for row in all_rows if (row.model_name or '').strip().lower() not in {'gpt-5.4'}), None)
+            if config is None and all_rows:
+                config = all_rows[0]
+
         if not config:
             raise ValueError(
                 f"LLM 配置不存在: id={inputs.llm_config_id}, name={inputs.llm_name}"

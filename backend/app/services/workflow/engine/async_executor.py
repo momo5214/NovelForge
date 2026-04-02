@@ -67,6 +67,16 @@ class ProgressEvent:
     error: Optional[str] = None
 
 
+def merge_resume_context(
+    *,
+    loaded_context: Dict[str, Any],
+    initial_context: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    merged = dict(initial_context or {})
+    merged.update(loaded_context or {})
+    return merged
+
+
 class AsyncExecutor:
     """异步执行器
     
@@ -133,6 +143,10 @@ class AsyncExecutor:
             # 只有当有已完成的节点时才算恢复执行
             if self.execution_state.completed_nodes:
                 is_resuming = True
+                self.execution_state.context = merge_resume_context(
+                    loaded_context=self.execution_state.context,
+                    initial_context=initial_context,
+                )
                 logger.info(
                     f"[AsyncExecutor] 检测到恢复执行: run_id={self.run_id}, "
                     f"已完成={len(self.execution_state.completed_nodes)}个节点"
@@ -587,6 +601,14 @@ class AsyncExecutor:
                 return evaluate_expression(expression, self.execution_state.context)
             elif value.startswith("$"):
                 # 变量引用，如 $novel.chapter_list
+                #
+                # 兼容 parser 生成的 "${expr}.attr" 形式（历史原因）：
+                # 例如："${architecture_steps.cards[0]}.id"
+                # 这种字符串不满足 "${...}" 的完整表达式格式，但本质上仍是表达式结果的属性访问。
+                # 这里将其整体交给表达式引擎处理，避免变量解析器 split('.') 无法理解 [] 索引。
+                if value.startswith("${") and "}." in value:
+                    return evaluate_expression(value[2:], self.execution_state.context)
+
                 ref = value[1:]  # 去掉 $ 前缀
                 return self._resolve_variable_reference(ref)
             else:

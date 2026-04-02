@@ -6,6 +6,7 @@
 """
 
 import asyncio
+import re
 from typing import List, Dict, Any
 from sqlmodel import Session, select
 from time import monotonic
@@ -19,6 +20,7 @@ from app.core import on_event, Event
 # 防抖相关
 _recent_keys: Dict[str, float] = {}
 _DEBOUNCE_MS = 1500  # 同一 key 在该时间窗内不再触发
+_STEP_TITLE_RE = re.compile(r"^步骤\s*(\d+)\s*[：:]")
 
 
 def _make_idempotency_key(event: str, workflow_id: int, card: Card | None, project_id: int | None) -> str:
@@ -104,6 +106,48 @@ def _check_condition(value: Any, op: str, target: Any) -> bool:
     return False
 
 
+def _resolve_step_value(card: Card) -> int | None:
+    """优先从 content.step 读取步骤号，缺失时回退到标题前缀。"""
+    try:
+        content = getattr(card, "content", None) or {}
+        if isinstance(content, dict):
+            raw_step = content.get("step")
+            if raw_step is not None and str(raw_step).strip() != "":
+                return int(raw_step)
+    except Exception:
+        pass
+
+    try:
+        title = str(getattr(card, "title", "") or "").strip()
+        match = _STEP_TITLE_RE.match(title)
+        if match:
+            return int(match.group(1))
+    except Exception:
+        pass
+
+    return None
+
+
+def _resolve_card_content_value(card: Card, key: str) -> Any:
+    """从卡片 content 中安全读取字段。"""
+    try:
+        content = getattr(card, "content", None) or {}
+        if isinstance(content, dict):
+            value = content.get(key)
+            if value is not None:
+                return value
+    except Exception:
+        pass
+    if key == "prompt_name":
+        try:
+            ai_params = getattr(card, "ai_params", None) or {}
+            if isinstance(ai_params, dict):
+                return ai_params.get("prompt_name")
+        except Exception:
+            pass
+    return None
+
+
 def _evaluate_filter(card: Card, filter_config: Dict, old_content: Dict | None = None) -> bool:
     """评估卡片是否满足过滤配置"""
     if not filter_config:
@@ -163,6 +207,7 @@ def _match_triggers_for_card(session: Session, event: str, card: Card, is_create
         session.refresh(card, ["card_type"])
     
     card_type_name = card.card_type.name if card.card_type else None
+    step_value = _resolve_step_value(card)
 
     # 从 triggers_cache 中获取触发器（性能优化）
     # 新版触发器匹配接口基于 event_name + event_data
@@ -172,6 +217,10 @@ def _match_triggers_for_card(session: Session, event: str, card: Card, is_create
         "project_id": card.project_id,
         "card_type": card_type_name,
         "is_created": bool(is_created),
+        "step": step_value,
+        "title": getattr(card, "title", None),
+        "prompt_name": _resolve_card_content_value(card, "prompt_name"),
+        "step_name": _resolve_card_content_value(card, "step_name"),
     }
     all_triggers = get_active_triggers_by_event(session, event_name, event_data)
     
@@ -422,6 +471,7 @@ def handle_card_saved(event: Event):
             except Exception:
                 card_type = None
         card_type_name = getattr(card_type, "name", None) if card_type else None
+    step_value = _resolve_step_value(card)
     
     triggers = _match_triggers_for_card(session, "onsave", card, is_created=is_created)
     scope = {
@@ -429,6 +479,10 @@ def handle_card_saved(event: Event):
         "project_id": card.project_id,
         "card_type": card_type_name,
         "is_created": bool(is_created),
+        "step": step_value,
+        "title": getattr(card, "title", None),
+        "prompt_name": _resolve_card_content_value(card, "prompt_name"),
+        "step_name": _resolve_card_content_value(card, "step_name"),
     }
     # 传递 event.data 作为 payload
     run_ids = _execute_triggers(session, "onsave", triggers, scope, card, card.project_id, payload=event.data)

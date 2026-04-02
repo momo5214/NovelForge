@@ -9,7 +9,7 @@ from app.db.session import get_session
 from app.db.models import Card
 from app.services.memory_service import MemoryService
 from app.services.card_service import CardService
-from app.schemas.entity import UpdateDynamicInfo
+from app.schemas.entity import UpdateDynamicInfo, UpdateCharacterState
 from app.schemas.relation_extract import RelationExtraction
 from app.schemas.memory import (
     QueryRequest,
@@ -20,8 +20,11 @@ from app.schemas.memory import (
     IngestRelationsFromPreviewRequest,
     IngestRelationsFromPreviewResponse,
     ExtractOnlyRequest,
+    ExtractCharacterStateRequest,
     UpdateDynamicInfoRequest,
     UpdateDynamicInfoResponse,
+    UpdateCharacterStateRequest,
+    UpdateCharacterStateResponse,
 )
 
 
@@ -86,6 +89,23 @@ async def extract_dynamic_info_only(req: ExtractOnlyRequest, session: Session = 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"动态信息提取失败: {e}")
 
+
+@router.post("/extract-character-state", response_model=UpdateCharacterState, summary="仅提取角色状态（不更新）")
+async def extract_character_state_only(req: ExtractCharacterStateRequest, session: Session = Depends(get_session)):
+    svc = MemoryService(session)
+    try:
+        data = await svc.extract_character_state_from_text(
+            text=req.text,
+            participants=req.participants,
+            llm_config_id=req.llm_config_id,
+            timeout=req.timeout,
+            project_id=req.project_id,
+            extra_context=req.extra_context,
+        )
+        return data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"角色状态提取失败: {e}")
+
 # === 按预览后的结果入图 ===
 @router.post("/ingest-relations", response_model=IngestRelationsFromPreviewResponse, summary="根据 RelationExtraction 结果入图")
 def ingest_relations_from_preview(req: IngestRelationsFromPreviewRequest, session: Session = Depends(get_session)):
@@ -118,3 +138,20 @@ def update_dynamic_info(req: UpdateDynamicInfoRequest, session: Session = Depend
     except Exception as e:
         logger.error(f"Failed to update dynamic info: {e}")
         raise HTTPException(status_code=500, detail=str(e)) 
+
+
+@router.post("/update-character-state", response_model=UpdateCharacterStateResponse)
+def update_character_state(req: UpdateCharacterStateRequest, session: Session = Depends(get_session)):
+    svc = MemoryService(session)
+    try:
+        result = svc.update_character_state(
+            project_id=req.project_id,
+            data=req.data,
+        )
+        return UpdateCharacterStateResponse(
+            success=result.get("success", False),
+            updated_card_count=result.get("updated_card_count", 0)
+        )
+    except Exception as e:
+        logger.error(f"Failed to update character state: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

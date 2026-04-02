@@ -9,13 +9,6 @@ from loguru import logger
 
 from ...registry import register_node
 from ..base import BaseNode
-from app.services.ai.core.chat_model_factory import build_chat_model
-from app.services.ai.core.agent_builder import build_agent
-from app.services.ai.assistant.tools import (
-    ASSISTANT_TOOL_REGISTRY,
-    AssistantDeps,
-    set_assistant_deps,
-)
 
 
 # ============================================================
@@ -69,6 +62,13 @@ class AgentNode(BaseNode[AgentInput, AgentOutput]):
 
     async def execute(self, input_data: AgentInput) -> AsyncIterator[AgentOutput]:
         """执行 Agent"""
+        from app.services.ai.assistant.tools import (
+            ASSISTANT_TOOL_REGISTRY,
+            AssistantDeps,
+            set_assistant_deps,
+        )
+        from app.services.ai.core.agent_builder import build_agent
+        from app.services.ai.core.chat_model_factory import build_chat_model
         
         # 使用显式传递的项目ID（可选）
         project_id = input_data.project_id or -1

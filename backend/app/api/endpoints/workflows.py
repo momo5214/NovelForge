@@ -1,5 +1,6 @@
 from typing import List, Optional, Dict, Any
 import asyncio
+import json
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlmodel import Session, select
@@ -63,6 +64,10 @@ from app.services.workflow import (
     get_node_types,
     get_all_node_metadata,
     RunManager
+)
+from app.services.chapter_postprocess_service import (
+    invalidate_resume_node_states_for_workflow,
+    resolve_manual_params_for_workflow_run,
 )
 
 
@@ -204,6 +209,10 @@ def get_project_templates(session: Session = Depends(get_session)):
     workflows = session.exec(stmt).all()
     
     templates = []
+    template_display_name_map = {
+        "snowflake": "雪花创作法",
+        "enhanced": "增强创作链路",
+    }
     
     for wf in workflows:
         if not wf.triggers_cache:
@@ -215,10 +224,13 @@ def get_project_templates(session: Session = Depends(get_session)):
                 # 提取 template 参数
                 match = trigger.get("match") or {}
                 template_id = match.get("template")
+                if not template_id or template_id == "enhanced_patch_only":
+                    continue
                 
                 templates.append({
                     "workflow_id": wf.id,
                     "workflow_name": wf.name,
+                    "display_name": template_display_name_map.get(template_id, wf.name.replace("项目创建·", "")),
                     "template": template_id,  # 模板标识（如 "snowflake"）
                     "description": wf.description
                 })
@@ -451,6 +463,7 @@ async def execute_code_workflow_stream(
     workflow_id: int,
     resume: bool = False,
     run_id: Optional[int] = None,
+    params_json: Optional[str] = None,
     session: Session = Depends(get_session)
 ):
     """执行代码式工作流（流式SSE推送）
@@ -462,7 +475,6 @@ async def execute_code_workflow_stream(
         resume: 是否恢复执行（默认 False，从头开始）
         run_id: 恢复执行时的 run ID（resume=True 时必须提供）
     """
-    import json
     from app.services.workflow.parser.marker_parser import WorkflowParser
     from app.services.workflow.engine.async_executor import AsyncExecutor
     from app.services.workflow.engine.state_manager import StateManager
@@ -483,6 +495,16 @@ async def execute_code_workflow_stream(
     # 处理 run 记录
     run_manager = RunManager(session)
     
+    manual_params: Dict[str, Any] = {}
+    if params_json:
+        try:
+            parsed = json.loads(params_json)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=400, detail=f"params_json 不是合法 JSON: {exc}") from exc
+        if not isinstance(parsed, dict):
+            raise HTTPException(status_code=400, detail="params_json 必须是 JSON 对象")
+        manual_params = parsed
+
     if resume:
         # 恢复执行：必须提供 run_id
         if not run_id:
@@ -494,7 +516,27 @@ async def execute_code_workflow_stream(
         
         if run.workflow_id != workflow_id:
             raise HTTPException(status_code=400, detail="Run 不属于该工作流")
-        
+
+        if manual_params:
+            resolved_resume_params = resolve_manual_params_for_workflow_run(
+                session=session,
+                workflow_name=workflow.name,
+                manual_params=manual_params,
+                resume=True,
+                existing_params=run.params_json or {},
+            )
+            run.params_json = resolved_resume_params
+            invalidated_nodes = invalidate_resume_node_states_for_workflow(
+                session=session,
+                workflow_name=workflow.name,
+                run_id=run.id,
+            )
+            if invalidated_nodes:
+                logger.info(
+                    f"[CodeWorkflow] 恢复前清理节点缓存: run_id={run.id}, "
+                    f"nodes={invalidated_nodes}"
+                )
+
         # 更新状态为运行中
         run.status = "running"
         session.add(run)
@@ -502,6 +544,13 @@ async def execute_code_workflow_stream(
         
         logger.info(f"[CodeWorkflow] 恢复运行: run_id={run_id}, workflow_id={workflow_id}")
     else:
+        if manual_params:
+            manual_params = resolve_manual_params_for_workflow_run(
+                session=session,
+                workflow_name=workflow.name,
+                manual_params=manual_params,
+                resume=False,
+            )
         # 新建执行：使用 RunManager 创建（带幂等性保护）
         # 生成幂等键：基于工作流ID和时间窗口（5秒）
         from datetime import datetime
@@ -510,6 +559,7 @@ async def execute_code_workflow_stream(
         
         run = run_manager.create_run(
             workflow_id=workflow_id,
+            params=manual_params or None,
             idempotency_key=idempotency_key
         )
         run_id = run.id
@@ -563,11 +613,17 @@ async def execute_code_workflow_stream(
             _running_executors[run_id] = executor
             logger.info(f"[CodeWorkflow] 执行器已注册: run_id={run_id}")
 
+            initial_context: Dict[str, Any] = {}
+            if run.scope_json:
+                initial_context.update(run.scope_json)
+            if run.params_json:
+                initial_context.update(run.params_json)
+
             # 推送 run_id（让前端知道当前运行的 ID）
             yield f"data: {json.dumps({'type': 'run_started', 'run_id': run_id}, ensure_ascii=False)}\n\n"
 
             # 流式执行
-            async for event in executor.execute_stream(plan, initial_context={}):
+            async for event in executor.execute_stream(plan, initial_context=initial_context):
                 # 检查是否已暂停（优先检查）
                 if executor.is_paused:
                     logger.info(f"[CodeWorkflow] 检测到暂停状态，停止执行: run_id={run_id}")

@@ -4,6 +4,7 @@ from .select_llm import SelectLLMNode
 from .wait import WaitNode
 from .assert_node import LogicAssertNode
 from .expression import ExpressionNode
+from .parse_step4_characters import ParseStep4CharactersNode
 
 # 已删除的节点：
 # - Logic.Log → 用 Python logger 替代：logger.debug(...)
@@ -16,4 +17,5 @@ __all__ = [
     "WaitNode",
     "LogicAssertNode",
     "ExpressionNode",
+    "ParseStep4CharactersNode",
 ]

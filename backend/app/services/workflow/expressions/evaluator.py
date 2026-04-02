@@ -39,6 +39,13 @@ FORBIDDEN_FUNC_NAMES = {
     "breakpoint",
 }
 
+RUNTIME_SCOPE_NAMES = {
+    # 手动执行入口和部分触发器会在运行时注入这些参数。
+    "project_id",
+    "llm_config_id",
+    "target_card_id",
+}
+
 RESERVED_NAMES = set(keyword.kwlist) | {"True", "False", "None"}
 
 
@@ -93,7 +100,7 @@ def _analyze_tree(tree: ast.Expression) -> Set[str]:
     dependencies = collector.loaded_names - collector.bound_names
     dependencies = {
         name for name in dependencies
-        if name not in safe_globals and name not in RESERVED_NAMES
+        if name not in safe_globals and name not in RESERVED_NAMES and name not in RUNTIME_SCOPE_NAMES
     }
     return dependencies
 

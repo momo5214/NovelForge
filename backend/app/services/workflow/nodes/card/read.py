@@ -30,6 +30,8 @@ class CardReadOutput(BaseModel):
     content: Dict[str, Any] = Field(..., description="卡片内容")
     card_type_id: int = Field(..., description="卡片类型ID")
     parent_id: Optional[int] = Field(None, description="父卡片ID")
+    ai_params: Optional[Dict[str, Any]] = Field(None, description="卡片实例 AI 参数")
+    card_type: Optional[Dict[str, Any]] = Field(None, description="卡片类型摘要")
 
 
 @register_node
@@ -91,5 +93,14 @@ class CardReadNode(BaseNode[CardReadInput, CardReadOutput]):
             title=card.title,
             content=card.content,
             card_type_id=card.card_type_id,
-            parent_id=card.parent_id
+            parent_id=card.parent_id,
+            ai_params=card.ai_params,
+            card_type=(
+                {
+                    "id": card.card_type.id,
+                    "name": card.card_type.name,
+                    "ai_params": card.card_type.ai_params,
+                }
+                if getattr(card, "card_type", None) is not None else None
+            )
         )

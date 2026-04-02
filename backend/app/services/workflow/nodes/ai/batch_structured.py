@@ -8,7 +8,6 @@ if TYPE_CHECKING:
     from ...engine.async_executor import ProgressEvent
 
 from app.services.ai.core.model_builder import build_model_from_json_schema
-from app.services.ai.core.llm_service import generate_structured
 from ...registry import register_node
 from ..base import BaseNode
 from app.db.models import CardType
@@ -147,6 +146,8 @@ class BatchStructuredNode(BaseNode[BatchStructuredInput, BatchStructuredOutput])
                 
                 # LLM 调用
                 logger.info(f"[BatchStructured] Item {index}: 开始 LLM 调用")
+
+                from app.services.ai.core.llm_service import generate_structured
 
                 generated = await generate_structured(
                     session=self.context.session,

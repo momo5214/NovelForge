@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Optional, Tuple
 from sqlmodel import Session
 from sqlalchemy.orm.attributes import flag_modified
@@ -8,10 +9,16 @@ from loguru import logger
 
 from app.schemas.relation_extract import RelationExtraction, CN_TO_EN_KIND
 from app.schemas.entity import Entity
-from app.services.ai.core import llm_service
 from pydantic import BaseModel
 # 引入动态信息模型
-from app.schemas.entity import UpdateDynamicInfo, DynamicInfoType, DynamicInfoItem, DeletionInfo
+from app.schemas.entity import (
+    UpdateDynamicInfo,
+    DynamicInfoType,
+    DynamicInfoItem,
+    DeletionInfo,
+    CharacterCard,
+    UpdateCharacterState,
+)
 from app.db.models import Card, CardType
 from sqlmodel import select
 
@@ -100,10 +107,193 @@ DYNAMIC_INFO_LIMITS: Dict[str, int] = {
     "心理想法/目标快照": 3,
 }
 
+ROLE_WEIGHT_DEFAULTS: Dict[str, int] = {
+    "主角": 98,
+    "主角团配角": 75,
+    "反派": 70,
+    "普通NPC": 35,
+}
+
+ROLE_WEIGHT_SINGLE_CHAPTER_DELTA_LIMIT = 6
+
+
+def _derive_role_tier(weight: int) -> str:
+    if weight <= 20:
+        return "背景角色"
+    if weight <= 40:
+        return "单元角色"
+    if weight <= 60:
+        return "次要配角"
+    if weight <= 80:
+        return "关键角色"
+    if weight <= 95:
+        return "核心配角"
+    return "主角级"
+
+
+def _normalize_role_weight(weight: int, role_type: Optional[str]) -> int:
+    normalized = max(1, min(100, int(weight)))
+    if role_type == "主角":
+        normalized = max(90, normalized)
+    return normalized
+
+
+def _apply_role_weight_change(
+    current_weight: int,
+    suggested_weight: Optional[int],
+    role_type: Optional[str],
+) -> int:
+    base_weight = _normalize_role_weight(current_weight, role_type)
+    if suggested_weight is None:
+        return base_weight
+
+    target_weight = _normalize_role_weight(suggested_weight, role_type)
+    delta = target_weight - base_weight
+    if delta > ROLE_WEIGHT_SINGLE_CHAPTER_DELTA_LIMIT:
+        target_weight = base_weight + ROLE_WEIGHT_SINGLE_CHAPTER_DELTA_LIMIT
+    elif delta < -ROLE_WEIGHT_SINGLE_CHAPTER_DELTA_LIMIT:
+        target_weight = base_weight - ROLE_WEIGHT_SINGLE_CHAPTER_DELTA_LIMIT
+
+    return _normalize_role_weight(target_weight, role_type)
+
+
+def _role_state_limits(weight: int) -> Dict[str, int]:
+    high_weight = weight > 90
+    return {
+        "position_tracks": 3 if high_weight else 1,
+        "key_event_records": 5 if high_weight else 2,
+        "inventory_items": 5 if high_weight else 2,
+        "techniques": 5 if high_weight else 2,
+        "relationship_network": 5 if high_weight else 2,
+    }
+
+
+def _dedupe_keep_last(items: List[Any], key_func) -> List[Any]:
+    seen: Dict[Any, Any] = {}
+    order: List[Any] = []
+    for item in items:
+        key = key_func(item)
+        if key in seen:
+            try:
+                order.remove(key)
+            except ValueError:
+                pass
+        seen[key] = item
+        order.append(key)
+    return [seen[key] for key in order]
+
+
+def _latest_appearance_from_model(model: CharacterCard) -> Optional[Tuple[int, int]]:
+    candidates: List[Tuple[int, int]] = []
+    if model.last_appearance:
+        try:
+            candidates.append((int(model.last_appearance[0]), int(model.last_appearance[1])))
+        except Exception:
+            pass
+    for item in model.position_tracks or []:
+        try:
+            candidates.append((int(item.volume_number or 0), int(item.chapter_number)))
+        except Exception:
+            continue
+    for item in model.key_event_records or []:
+        try:
+            candidates.append((int(item.volume_number or 0), int(item.chapter_number)))
+        except Exception:
+            continue
+    if not candidates:
+        return None
+    return max(candidates)
+
+
+_TEXT_NORMALIZE_PATTERN = re.compile(r"[\s,，。；;：:、\-—_（）()\[\]【】\"'“”‘’]+")
+
+
+def _normalize_compare_text(text: str) -> str:
+    normalized = _TEXT_NORMALIZE_PATTERN.sub("", str(text or "").strip().lower())
+    return normalized
+
+
+def _collect_state_reference_texts(model: CharacterCard) -> List[str]:
+    texts: List[str] = []
+
+    for item in model.position_tracks or []:
+        texts.extend(
+            [
+                str(item.location or ""),
+                str(item.event or ""),
+                str(item.purpose or ""),
+                " ".join([str(name or "").strip() for name in (item.companions or []) if str(name or "").strip()]),
+            ]
+        )
+
+    for item in model.key_event_records or []:
+        texts.extend([str(item.event_type or ""), str(item.summary or "")])
+
+    if model.life_state:
+        texts.extend(
+            [
+                str(model.life_state.physical_state or ""),
+                str(model.life_state.psychological_state or ""),
+                str(model.life_state.long_term_impact or ""),
+            ]
+        )
+
+    for item in model.inventory_items or []:
+        texts.extend([str(item.name or ""), str(item.description or "")])
+
+    for item in model.techniques or []:
+        texts.extend([str(item.name or ""), str(item.description or "")])
+
+    for item in model.relationship_network or []:
+        texts.extend([str(item.target_name or ""), str(item.relation_type or "")])
+
+    if model.behavior_decision_pattern:
+        texts.extend(
+            [
+                str(model.behavior_decision_pattern.behavior_pattern or ""),
+                str(model.behavior_decision_pattern.decision_preference or ""),
+            ]
+        )
+
+    if model.dialogue_style_keywords:
+        texts.append(" ".join([str(x or "").strip() for x in (model.dialogue_style_keywords.style_tags or []) if str(x or "").strip()]))
+        texts.append(" ".join([str(x or "").strip() for x in (model.dialogue_style_keywords.keywords or []) if str(x or "").strip()]))
+
+    if model.romance_state:
+        texts.append(str(model.romance_state.state_description or ""))
+
+    return [text for text in texts if str(text or "").strip()]
+
+
+def _has_state_level_overlap(model: CharacterCard, info_text: str) -> bool:
+    candidate = _normalize_compare_text(info_text)
+    if len(candidate) < 4:
+        return False
+
+    for state_text in _collect_state_reference_texts(model):
+        normalized_state = _normalize_compare_text(state_text)
+        if len(normalized_state) < 4:
+            continue
+        if candidate == normalized_state:
+            return True
+        if len(candidate) >= 6 and candidate in normalized_state:
+            return True
+        if len(normalized_state) >= 6 and normalized_state in candidate:
+            return True
+
+    return False
+
 class MemoryService:
     def __init__(self, session: Session):
         self.session = session
         self.graph = get_provider()
+
+    @staticmethod
+    def _get_llm_service():
+        # 延迟导入，避免模块导入阶段强依赖 langchain/transformers。
+        from app.services.ai.core import llm_service
+
+        return llm_service
 
     async def extract_relations_llm(self, text: str, participants: Optional[List[ParticipantTyped]] = None, llm_config_id: int = 1, timeout: Optional[float] = None, prompt_name: Optional[str] = "关系提取") -> RelationExtraction:
         # 优先使用默认提示词，如果不存在则回退到硬编码版本
@@ -120,7 +310,7 @@ class MemoryService:
             "请从以下正文中抽取：\n"
             f"{text}"
         )
-        res = await llm_service.generate_structured(
+        res = await self._get_llm_service().generate_structured(
             session=self.session,
             llm_config_id=llm_config_id,
             user_prompt=user_prompt,
@@ -194,7 +384,7 @@ class MemoryService:
             f"{', '.join([p.name for p in character_participants])}\n\n"
         )
 
-        res = await llm_service.generate_structured(
+        res = await self._get_llm_service().generate_structured(
             session=self.session,
             llm_config_id=llm_config_id,
             user_prompt=user_prompt,
@@ -212,6 +402,95 @@ class MemoryService:
             if isinstance(res.info_list, list):
                 res.info_list = [it for it in res.info_list if (it.name or '').strip() in name_set]
         
+        return res
+
+    async def extract_character_state_from_text(
+        self,
+        text: str,
+        participants: Optional[List[ParticipantTyped]] = None,
+        llm_config_id: int = 1,
+        timeout: Optional[float] = None,
+        prompt_name: Optional[str] = "角色状态更新",
+        project_id: Optional[int] = None,
+        extra_context: Optional[str] = None,
+    ) -> UpdateCharacterState:
+        """从正文中提取角色状态更新，按权重限制字段范围。"""
+        prompt = prompt_service.get_prompt_by_name(self.session, prompt_name)
+        if not prompt:
+            raise ValueError(f"未找到提示词: {prompt_name}")
+        system_prompt = prompt.template
+
+        schema_json = UpdateCharacterState.model_json_schema()
+        system_prompt += f"\n\n请严格按照以下 JSON Schema 格式进行输出:\n{schema_json}"
+
+        ref_blocks: List[str] = []
+        if extra_context:
+            ref_blocks.append(f"【大纲参考信息，不允许直接抄写】\n{extra_context}")
+
+        character_participants = [p for p in (participants or []) if p.type == 'character']
+        if project_id and character_participants:
+            lines: List[str] = []
+            for p in character_participants:
+                st = select(Card).where(Card.project_id == project_id, Card.title == p.name)
+                card = self.session.exec(st).first()
+                if not card or not card.card_type or card.card_type.name != '角色卡':
+                    continue
+                try:
+                    model = CharacterCard.model_validate(card.content or {})
+                    weight = _normalize_role_weight(
+                        int(model.role_weight or ROLE_WEIGHT_DEFAULTS.get(model.role_type, 50)),
+                        model.role_type,
+                    )
+                    tier = model.role_tier or _derive_role_tier(weight)
+                    lines.append(f"- {p.name}（权重={weight}，层级={tier}）")
+                    if model.last_appearance:
+                        lines.append(f"  最后出场：卷{model.last_appearance[0]} 章{model.last_appearance[1]}")
+                    if model.key_event_records:
+                        lines.append(
+                            "  关键事件：" + "；".join(
+                                [f"第{item.chapter_number}章[{item.event_type}] {item.summary}" for item in model.key_event_records[:3]]
+                            )
+                        )
+                    if model.position_tracks:
+                        lines.append(
+                            "  位置轨迹：" + "；".join(
+                                [f"第{item.chapter_number}章 {item.location}" for item in model.position_tracks[:2]]
+                            )
+                        )
+                    if model.life_state:
+                        lines.append(
+                            f"  生命状态：身体={model.life_state.physical_state}；心理={model.life_state.psychological_state}"
+                        )
+                    if model.dynamic_info:
+                        lines.append(f"  动态信息类别：{', '.join(model.dynamic_info.keys())}")
+                except Exception as e:
+                    logger.warning(f"Failed to prepare character state context for {p.name}: {e}")
+            if lines:
+                ref_blocks.append("【现有角色状态（只读参考）】\n" + "\n".join(lines))
+
+        ref_text = ("\n\n".join(ref_blocks) + "\n\n") if ref_blocks else ""
+        user_prompt = (
+            f"{ref_text}"
+            f"章节正文：\n{text}\n\n"
+            f"请仅为这些角色输出状态更新：{', '.join([p.name for p in character_participants])}\n"
+        )
+
+        res = await self._get_llm_service().generate_structured(
+            session=self.session,
+            llm_config_id=llm_config_id,
+            user_prompt=user_prompt,
+            output_type=UpdateCharacterState,
+            system_prompt=system_prompt,
+            timeout=timeout,
+        )
+        if not isinstance(res, UpdateCharacterState):
+            raise ValueError("LLM 角色状态提取失败：输出格式不符合 UpdateCharacterState")
+
+        if character_participants:
+            name_set = {p.name for p in character_participants}
+            if isinstance(res.state_list, list):
+                res.state_list = [it for it in res.state_list if (it.name or "").strip() in name_set]
+
         return res
 
     def query_subgraph(
@@ -472,13 +751,30 @@ class MemoryService:
                         model.dynamic_info[cat] = []
                     
                     existing_items = model.dynamic_info[cat]
+                    existing_normalized = {
+                        _normalize_compare_text(str(item.info or ""))
+                        for item in existing_items
+                        if _normalize_compare_text(str(item.info or ""))
+                    }
                     
                     # 合并（新项追加在队尾，便于 FIFO）
                     for new_item in items:
+                        normalized_info = _normalize_compare_text(str(new_item.info or ""))
+                        if not normalized_info:
+                            continue
+                        if normalized_info in existing_normalized:
+                            continue
+                        if _has_state_level_overlap(model, new_item.info):
+                            logger.info(
+                                f"[DynamicInfo] 跳过与当前状态层重复的动态信息: role={info_group.name}, "
+                                f"category={cat}, info={new_item.info}"
+                            )
+                            continue
                         # 将占位或缺失ID暂记为 0，稍后统一分配正数ID
                         if not isinstance(new_item.id, int) or new_item.id <= 0:
                             new_item.id = 0
                         existing_items.append(new_item)
+                        existing_normalized.add(normalized_info)
                     
                     # 统一ID规范化：为所有 <=0 的条目分配连续正数ID（不改变已有正数ID）
                     existing_positive = [it.id for it in existing_items if isinstance(it.id, int) and it.id > 0]
@@ -513,3 +809,130 @@ class MemoryService:
                 self.session.refresh(card)
 
         return {"success": True, "updated_card_count": len(updated_cards)} 
+
+    def update_character_state(self, project_id: int, data: UpdateCharacterState) -> Dict[str, Any]:
+        """按角色权重将最新角色状态合并回角色卡，只保留最近有效记录。"""
+        state_list = data.state_list or []
+        if not state_list:
+            return {"success": False, "updated_card_count": 0}
+
+        all_names = list(set([item.name for item in state_list if (item.name or "").strip()]))
+        if not all_names:
+            return {"success": False, "updated_card_count": 0}
+
+        stmt = select(Card).where(Card.project_id == project_id, Card.title.in_(all_names))
+        cards = self.session.exec(stmt).all()
+        card_map = {c.title: c for c in cards if c.card_type and c.card_type.name == '角色卡'}
+
+        updated_cards: Dict[str, Card] = {}
+
+        for patch in state_list:
+            card = updated_cards.get(patch.name) or card_map.get(patch.name)
+            if not card:
+                continue
+
+            try:
+                model = CharacterCard.model_validate(card.content or {})
+
+                weight = _apply_role_weight_change(
+                    current_weight=int(model.role_weight or ROLE_WEIGHT_DEFAULTS.get(model.role_type, 50)),
+                    suggested_weight=patch.role_weight,
+                    role_type=model.role_type,
+                )
+                model.role_weight = weight
+                model.role_tier = _derive_role_tier(weight)
+                limits = _role_state_limits(weight)
+
+                if patch.aliases:
+                    merged_aliases = [*(model.aliases or []), *patch.aliases]
+                    deduped: List[str] = []
+                    seen = set()
+                    for alias in merged_aliases:
+                        normalized = str(alias or "").strip()
+                        if not normalized or normalized in seen:
+                            continue
+                        seen.add(normalized)
+                        deduped.append(normalized)
+                    model.aliases = deduped[:8]
+
+                if patch.position_tracks:
+                    merged_tracks = [*(model.position_tracks or []), *patch.position_tracks]
+                    merged_tracks = _dedupe_keep_last(
+                        merged_tracks,
+                        lambda item: (
+                            int(item.volume_number or 0),
+                            int(item.chapter_number),
+                            str(item.location or "").strip(),
+                            str(item.event or "").strip(),
+                            str(item.purpose or "").strip(),
+                        ),
+                    )
+                    merged_tracks.sort(key=lambda item: (int(item.volume_number or 0), int(item.chapter_number)))
+                    model.position_tracks = merged_tracks[-limits["position_tracks"]:]
+
+                if patch.key_event_records and weight >= 21:
+                    merged_events = [*(model.key_event_records or []), *patch.key_event_records]
+                    merged_events = _dedupe_keep_last(
+                        merged_events,
+                        lambda item: (
+                            int(item.volume_number or 0),
+                            int(item.chapter_number),
+                            str(item.event_type or "").strip(),
+                            str(item.summary or "").strip(),
+                        ),
+                    )
+                    merged_events.sort(key=lambda item: (int(item.volume_number or 0), int(item.chapter_number)))
+                    model.key_event_records = merged_events[-limits["key_event_records"]:]
+
+                if patch.life_state and weight >= 41:
+                    model.life_state = patch.life_state
+
+                if patch.inventory_items and weight >= 41:
+                    merged_inventory = [*(model.inventory_items or []), *patch.inventory_items]
+                    merged_inventory = _dedupe_keep_last(merged_inventory, lambda item: str(item.name or "").strip())
+                    model.inventory_items = merged_inventory[-limits["inventory_items"]:]
+
+                if patch.techniques and weight >= 41:
+                    merged_techniques = [*(model.techniques or []), *patch.techniques]
+                    merged_techniques = _dedupe_keep_last(merged_techniques, lambda item: str(item.name or "").strip())
+                    model.techniques = merged_techniques[-limits["techniques"]:]
+
+                if patch.relationship_network and weight >= 61:
+                    merged_relationships = [*(model.relationship_network or []), *patch.relationship_network]
+                    merged_relationships = _dedupe_keep_last(
+                        merged_relationships,
+                        lambda item: (
+                            str(item.target_name or "").strip(),
+                            str(item.relation_type or "").strip(),
+                        ),
+                    )
+                    model.relationship_network = merged_relationships[-limits["relationship_network"]:]
+
+                if patch.behavior_decision_pattern and weight >= 81:
+                    model.behavior_decision_pattern = patch.behavior_decision_pattern
+
+                if patch.dialogue_style_keywords and weight >= 81:
+                    model.dialogue_style_keywords = patch.dialogue_style_keywords
+
+                if patch.romance_state and weight >= 96:
+                    model.romance_state = patch.romance_state
+
+                latest_appearance = _latest_appearance_from_model(model)
+                if latest_appearance:
+                    model.last_appearance = latest_appearance
+
+                card.content = model.model_dump(exclude_unset=True)
+                flag_modified(card, "content")
+                updated_cards[card.title] = card
+            except Exception as e:
+                logger.warning(f"Failed to update character state for {patch.name}: {e}")
+
+        for card in updated_cards.values():
+            self.session.add(card)
+
+        if updated_cards:
+            self.session.commit()
+            for card in updated_cards.values():
+                self.session.refresh(card)
+
+        return {"success": True, "updated_card_count": len(updated_cards)}

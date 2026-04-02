@@ -5,7 +5,12 @@
 
 from .token_utils import estimate_tokens, calc_input_tokens
 from .quota_manager import precheck_quota, record_usage
-from .chat_model_factory import build_chat_model
+
+
+def build_chat_model(*args, **kwargs):
+    from .chat_model_factory import build_chat_model as _build_chat_model
+
+    return _build_chat_model(*args, **kwargs)
 
 __all__ = [
     'build_chat_model',

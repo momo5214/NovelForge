@@ -5,6 +5,7 @@ from urllib.parse import quote
 
 from app.db.session import get_session
 from app.services.card_service import CardService, CardTypeService
+from app.services.chapter_candidate_character_service import confirm_chapter_candidate_characters
 from app.services.card_export_service import CardExportService
 from app.services.schema_service import compose_schema_with_card_types, localize_schema_titles
 from app.services.card_params_service import merge_effective_ai_params
@@ -39,6 +40,26 @@ def _resolve_card_type_name(db: Session, card: Card) -> str | None:
     if db_card_type and getattr(db_card_type, "name", None):
         return str(db_card_type.name)
     return None
+
+
+def _attach_effective_ui_layout(card: Card, effective_schema: Dict[str, Any]) -> Dict[str, Any]:
+    """Attach instance/type ui_layout to the effective schema for frontend section rendering."""
+    if not isinstance(effective_schema, dict):
+        return effective_schema
+
+    composed = dict(effective_schema)
+
+    # Card-level schema override wins; otherwise fall back to CardType.ui_layout.
+    card_schema = getattr(card, "json_schema", None)
+    if isinstance(card_schema, dict) and isinstance(card_schema.get("ui_layout"), dict):
+        composed["ui_layout"] = card_schema["ui_layout"]
+        return composed
+
+    card_type = getattr(card, "card_type", None)
+    ui_layout = getattr(card_type, "ui_layout", None) if card_type else None
+    if isinstance(ui_layout, dict):
+        composed["ui_layout"] = ui_layout
+    return composed
 
 # --- CardType Endpoints ---
 # 说明：CardTypeRead 需包含 default_ai_context_template 字段（由 Pydantic schema 定义控制）。
@@ -310,6 +331,17 @@ def copy_card_endpoint(card_id: int, payload: CardCopyOrMoveRequest, db: Session
     except BusinessException as e:
         raise HTTPException(status_code=e.status_code, detail=e.message)
 
+
+@router.post("/cards/{card_id}/candidate-characters/confirm")
+def confirm_candidate_characters(card_id: int, db: Session = Depends(get_session)) -> Dict[str, Any]:
+    card = db.get(Card, card_id)
+    if not card:
+        raise HTTPException(status_code=404, detail="Card not found")
+    try:
+        return confirm_chapter_candidate_characters(db, card_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
 @router.post("/cards/{card_id}/move", response_model=CardRead)
 def move_card_endpoint(card_id: int, payload: CardCopyOrMoveRequest, db: Session = Depends(get_session)):
     service = CardService(db)
@@ -331,6 +363,7 @@ def get_card_schema(card_id: int, db: Session = Depends(get_session)) -> Dict[st
     effective = c.json_schema if c.json_schema is not None else (c.card_type.json_schema if c.card_type else None)
     # 动态装配引用
     composed = compose_schema_with_card_types(db, effective or {})
+    composed = _attach_effective_ui_layout(c, composed)
     return {"json_schema": c.json_schema, "effective_schema": composed, "follow_type": c.json_schema is None}
 
 @router.put("/cards/{card_id}/schema")
@@ -345,6 +378,7 @@ def update_card_schema(card_id: int, payload: Dict[str, Any], db: Session = Depe
     db.refresh(c)
     effective = c.json_schema if c.json_schema is not None else (c.card_type.json_schema if c.card_type else None)
     composed = compose_schema_with_card_types(db, effective or {})
+    composed = _attach_effective_ui_layout(c, composed)
     return {"json_schema": c.json_schema, "effective_schema": composed, "follow_type": c.json_schema is None}
 
 @router.post("/cards/{card_id}/schema/apply-to-type")

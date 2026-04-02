@@ -6,6 +6,11 @@ from sqlmodel import Session, select
 from datetime import datetime
 
 from app.db.models import ForeshadowItem as ForeshadowItemModel
+from app.services.foreshadow_parser import (
+    infer_foreshadow_label,
+    infer_foreshadow_type,
+    parse_foreshadow_entry,
+)
 
 
 class ForeshadowService:
@@ -63,16 +68,80 @@ class ForeshadowService:
         out: List[ForeshadowItemModel] = []
         for it in entries:
             title = str(it.get('title') or '').strip()
+            parsed = parse_foreshadow_entry(it.get('note') or title)
+            foreshadow_id = str(it.get('foreshadow_id') or parsed.get('foreshadow_id') or '').strip() or None
+            display_title = str(it.get('display_title') or parsed.get('display_title') or '').strip() or None
+            if not title and foreshadow_id:
+                title = f"{foreshadow_id} {display_title or infer_foreshadow_label(foreshadow_id)}".strip()
             if not title:
                 continue
-            item = ForeshadowItemModel(
-                project_id=project_id,
-                chapter_id=it.get('chapter_id'),
-                title=title,
-                type=str(it.get('type') or 'other') or 'other',
-                note=it.get('note'),
-                status='open',
-            )
+            desired_status = str(it.get('status') or 'open').strip().lower()
+            desired_status = 'resolved' if desired_status == 'resolved' else 'open'
+            type_value = str(it.get('type') or parsed.get('foreshadow_type') or infer_foreshadow_type(foreshadow_id) or 'other') or 'other'
+            note = it.get('note') or parsed.get('raw_text') or parsed.get('description')
+
+            item = None
+            if foreshadow_id:
+                stmt = select(ForeshadowItemModel).where(
+                    ForeshadowItemModel.project_id == project_id,
+                    ForeshadowItemModel.foreshadow_id == foreshadow_id,
+                )
+                item = self.session.exec(stmt).first()
+            if item is None:
+                stmt = select(ForeshadowItemModel).where(
+                    ForeshadowItemModel.project_id == project_id,
+                    ForeshadowItemModel.title == title,
+                )
+                item = self.session.exec(stmt).first()
+
+            due_chapter_number = it.get('due_chapter_number')
+            if due_chapter_number in (None, ''):
+                due_chapter_number = parsed.get('due_chapter_number')
+            try:
+                due_chapter_number = int(due_chapter_number) if due_chapter_number not in (None, '') else None
+            except Exception:
+                due_chapter_number = None
+
+            try:
+                first_chapter_number = int(it.get('first_chapter_number')) if it.get('first_chapter_number') not in (None, '') else None
+            except Exception:
+                first_chapter_number = None
+            try:
+                last_chapter_number = int(it.get('last_chapter_number')) if it.get('last_chapter_number') not in (None, '') else None
+            except Exception:
+                last_chapter_number = None
+
+            if item is None:
+                item = ForeshadowItemModel(
+                    project_id=project_id,
+                    chapter_id=it.get('chapter_id'),
+                    foreshadow_id=foreshadow_id,
+                    title=title,
+                    display_title=display_title or (infer_foreshadow_label(foreshadow_id) if foreshadow_id else title),
+                    type=type_value,
+                    note=note,
+                    status=desired_status,
+                    due_chapter_number=due_chapter_number,
+                    first_chapter_number=first_chapter_number,
+                    last_chapter_number=last_chapter_number,
+                    resolved_at=datetime.utcnow() if desired_status == 'resolved' else None,
+                )
+            else:
+                item.chapter_id = it.get('chapter_id') or item.chapter_id
+                item.foreshadow_id = foreshadow_id or item.foreshadow_id
+                item.title = title or item.title
+                item.display_title = display_title or item.display_title or item.title
+                item.type = type_value or item.type or 'other'
+                item.note = note
+                item.status = desired_status
+                item.due_chapter_number = due_chapter_number or item.due_chapter_number
+                item.first_chapter_number = item.first_chapter_number or first_chapter_number or last_chapter_number
+                if last_chapter_number:
+                    item.last_chapter_number = max(int(item.last_chapter_number or last_chapter_number), last_chapter_number)
+                item.resolved_at = datetime.utcnow() if desired_status == 'resolved' else None
+                if desired_status != 'resolved':
+                    item.resolved_at = None
+
             self.session.add(item)
             out.append(item)
         if out:

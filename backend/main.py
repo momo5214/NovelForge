@@ -85,13 +85,21 @@ def read_root():
 
 if __name__ == "__main__":
     import uvicorn
-    # 添加reload=True，这样当代码修改时会自动重新加载
-    # 配置更短的优雅关闭时间，便于 Ctrl+C 快速退出
+
+    reload_env = os.getenv("UVICORN_RELOAD", "").strip().lower()
+    if reload_env in {"1", "true", "yes", "on"}:
+        reload_enabled = True
+    elif reload_env in {"0", "false", "no", "off"}:
+        reload_enabled = False
+    else:
+        reload_enabled = bool(settings.app.debug)
+
+    # 默认仅在调试模式下启用热重载，避免直接运行 main.py 时被重载器干扰。
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
         port=54321,
-        reload=True,
+        reload=reload_enabled,
         timeout_graceful_shutdown=1,
     )
 
