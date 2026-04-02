@@ -5,10 +5,6 @@
 
 from typing import Optional
 
-from langchain_anthropic import ChatAnthropic
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_openai import ChatOpenAI
-from langchain_qwq import ChatQwen
 from sqlmodel import Session
 
 from app.db.models import LLMConfig
@@ -52,6 +48,7 @@ def build_chat_model(
         common_kwargs["timeout"] = float(timeout)
 
     if provider == "openai_compatible":
+        from langchain_qwq import ChatQwen
         model_kwargs: dict = {
             "model": cfg.model_name,
             "api_key": cfg.api_key,
@@ -64,6 +61,7 @@ def build_chat_model(
         return ChatQwen(**model_kwargs)
 
     if provider == "openai":
+        from langchain_openai import ChatOpenAI
         model_kwargs = {
             "model": cfg.model_name,
             "api_key": cfg.api_key,
@@ -72,6 +70,7 @@ def build_chat_model(
         return ChatOpenAI(**model_kwargs)
 
     if provider == "anthropic":
+        from langchain_anthropic import ChatAnthropic
         model_kwargs = {
             "model": cfg.model_name,
             "api_key": cfg.api_key,
@@ -82,6 +81,7 @@ def build_chat_model(
         return ChatAnthropic(**model_kwargs)
 
     if provider == "google":
+        from langchain_google_genai import ChatGoogleGenerativeAI
         model_kwargs = {
             "model": cfg.model_name,
             "api_key": cfg.api_key,
