@@ -3,12 +3,15 @@
 提取 Agent 创建逻辑，供灵感助手和工作流节点复用。
 """
 
-from typing import List, Optional
-from langchain.agents import create_agent
-from langchain.agents.middleware import SummarizationMiddleware
-from langchain_core.language_models import BaseChatModel
-from langchain_core.tools import BaseTool
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, List, Optional
+
 from loguru import logger
+
+if TYPE_CHECKING:
+    from langchain_core.language_models import BaseChatModel
+    from langchain_core.tools import BaseTool
 
 
 def build_agent(
@@ -31,9 +34,10 @@ def build_agent(
         LangChain Agent 实例
     """
     middleware = []
-    
+
     if enable_summarization:
         try:
+            from langchain.agents.middleware import SummarizationMiddleware
             middleware.append(
                 SummarizationMiddleware(
                     model=model,
@@ -42,8 +46,9 @@ def build_agent(
             )
         except Exception as e:
             logger.warning(f"初始化 SummarizationMiddleware 失败，将忽略上下文摘要: {e}")
-    
+
     # 使用 LangChain 1.x 的 create_agent 创建带工具的智能体
+    from langchain.agents import create_agent
     agent = create_agent(
         model=model,
         tools=tools,
