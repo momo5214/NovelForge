@@ -75,6 +75,26 @@
 
           <div class="category-block">
             <div class="category-header">
+              <h3>创作规模</h3>
+            </div>
+            <div class="scale-grid">
+              <div class="scale-item">
+                <span class="scale-label">总章数</span>
+                <el-input-number v-model="localData.total_chapters" :min="1" :step="1" controls-position="right" />
+              </div>
+              <div class="scale-item">
+                <span class="scale-label">总卷数</span>
+                <el-input-number v-model="localData.volume_count" :min="1" :step="1" controls-position="right" />
+              </div>
+              <div class="scale-item">
+                <span class="scale-label">每章字数</span>
+                <el-input-number v-model="localData.chapter_word_count" :min="100" :step="100" controls-position="right" />
+              </div>
+            </div>
+          </div>
+
+          <div class="category-block">
+            <div class="category-header">
               <h3>情感关系</h3>
               <el-button @click="randomizeRelationship" type="primary" plain size="small">随机灵感</el-button>
             </div>
@@ -95,20 +115,26 @@ import type { components } from '@renderer/types/generated'
 import { useCardStore } from '@renderer/stores/useCardStore'
 import { ElMessage } from 'element-plus'
 // 引入原子组件
-import { 
+import {
   ElCheckbox,
   ElRadio,
   ElRadioGroup,
   ElCascader,
   ElScrollbar,
   ElSelect,
-  ElOption
+  ElOption,
+  ElInputNumber
 } from 'element-plus'
 import { onMounted } from 'vue'
 import { listKnowledge } from '@renderer/api/setting'
 // Define types from generated schemas
 type CardRead = components['schemas']['CardRead']
 type Tags = components['schemas']['Tags']
+type EditableTags = Tags & {
+  total_chapters?: number
+  volume_count?: number
+  chapter_word_count?: number
+}
 type WeightLevel = '低权重' | '中权重' | '高权重'
 // 权重档位常量，统一来源
 const WEIGHT_LEVELS: WeightLevel[] = ['低权重', '中权重', '高权重']
@@ -122,12 +148,15 @@ const cardStore = useCardStore()
 const isSaving = ref(false)
 
 // 本地可编辑数据
-const localData = reactive<Tags>({
+const localData = reactive<EditableTags>({
   theme: '',
   audience: '通用' as any,
   narrative_person: '第三人称' as any,
   story_tags: [],
-  affection: ''
+  affection: '',
+  total_chapters: 60 as any,
+  volume_count: 3 as any,
+  chapter_word_count: 3000 as any
 })
 // 选项数据（运行时从知识库解析填充）
 const themeOptions = ref<any[]>([])
@@ -141,7 +170,7 @@ watch(
   (newCard) => {
     // 确保 content 是对象后再赋值
     if (newCard && newCard.content && typeof newCard.content === 'object') {
-      Object.assign(localData, newCard.content as unknown as Partial<Tags>)
+      Object.assign(localData, newCard.content as unknown as Partial<EditableTags>)
     }
   },
   { deep: true, immediate: true }
@@ -156,7 +185,7 @@ const handleRandomize = () => {
 const saveTags = async () => {
   isSaving.value = true
   try {
-    await cardStore.modifyCard(props.card.id, { content: localData });
+    await cardStore.modifyCard(props.card.id, { content: localData, needs_confirmation: false });
     ElMessage.success('已保存标签设置')
   } catch (error) {
     // 错误消息已在 store 处理
@@ -373,6 +402,23 @@ onMounted(async () => {
   border-left: 4px solid var(--el-color-primary);
   padding-left: 8px;
   color: var(--text-color-primary);
+}
+
+.scale-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.scale-item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.scale-label {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
 }
 
 .story-tags-grid {

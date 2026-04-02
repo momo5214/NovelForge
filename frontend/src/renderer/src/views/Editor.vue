@@ -64,7 +64,7 @@
                 <el-icon class="card-icon"> 
                   <component :is="getIconByCardType(data.card_type?.name || data.__groupType)" />
                 </el-icon>
-                <span class="label">{{ node.label || data.title }}</span>
+                <span class="label">{{ getDisplayTitle(data) }}</span>
                 <span v-if="data.children && data.children.length > 0" class="child-count">{{ data.children.length }}</span>
               </div>
               <template #dropdown>
@@ -78,8 +78,10 @@
                     <el-dropdown-item v-else command="delete" divided>删除卡片</el-dropdown-item>
                   </template>
                   <template v-else>
-                    <el-dropdown-item command="create-child-in-group">新建子卡片</el-dropdown-item>
-                    <el-dropdown-item command="delete-group" divided>删除该分组下所有卡片</el-dropdown-item>
+                    <template v-if="!data.__isSystemGroup">
+                      <el-dropdown-item command="create-child-in-group">新建子卡片</el-dropdown-item>
+                      <el-dropdown-item command="delete-group" divided>删除该分组下所有卡片</el-dropdown-item>
+                    </template>
                   </template>
                 </el-dropdown-menu>
               </template>
@@ -313,6 +315,7 @@ import { getCardSchema, createCardType } from '@renderer/api/setting'
 import { getProjects } from '@renderer/api/projects'
 import { getCardsForProject, copyCard, getCardAIParams } from '@renderer/api/cards'
 import { generateAIContent } from '@renderer/api/ai'
+import { getSystemCardDisplayTitle, isSystemCardTitle } from '@renderer/utils/systemCardTitle'
  
  // Mock components that will be created later
  const CardEditorHost = defineAsyncComponent(() => import('@renderer/components/cards/CardEditorHost.vue'));
@@ -411,7 +414,11 @@ function openExportDialog() {
  // 当某节点的直接子卡片中，任一“类型的数量 > 2”时，为该类型创建一个虚拟分组节点；
  // 其余数量 <= 2 的类型保持原样显示（即使整个父节点下只有一种类型，只要该类型数量>2也要分组）。
  // 该结构完全在前端进行，不影响后端数据
- interface TreeNode { id: number | string; title: string; children?: TreeNode[]; card_type?: { name: string }; __isGroup?: boolean; __groupType?: string }
+interface TreeNode { id: number | string; title: string; label?: string; children?: TreeNode[]; card_type?: { name: string }; __isGroup?: boolean; __groupType?: string; __isSystemGroup?: boolean; __parentCardId?: number | string }
+
+function getDisplayTitle(node: any) {
+  return node?.__isGroup ? String(node?.title || '') : getSystemCardDisplayTitle(node?.title || '')
+}
 
 
  function buildGroupedNodes(nodes: any[]): any[] {
@@ -425,9 +432,11 @@ function openExportDialog() {
       return node
     }
     if (Array.isArray(n.children) && n.children.length > 0) {
+      const systemChildren = n.children.filter((c: any) => isSystemCardTitle(c?.title || ''))
+      const normalChildren = n.children.filter((c: any) => !isSystemCardTitle(c?.title || ''))
       // 统计子节点类型数量
       const byType: Record<string, any[]> = {}
-      n.children.forEach((c: any) => {
+      normalChildren.forEach((c: any) => {
         const typeName = c.card_type?.name || '未知类型'
         if (!byType[typeName]) byType[typeName] = []
         byType[typeName].push(c)
@@ -441,6 +450,7 @@ function openExportDialog() {
             grouped.push({
               id: `group:${n.id}:${t}`,
               title: `${t}`,
+              label: `${t}`,
               __isGroup: true,
               __groupType: t,
               __parentCardId: n.id,  // 保存实际父卡片ID
@@ -451,21 +461,58 @@ function openExportDialog() {
           grouped.push(...list)
           }
         })
+      if (systemChildren.length > 0) {
+        grouped.push({
+          id: `group:${n.id}:系统卡`,
+          title: '系统卡',
+          label: '系统卡',
+          __isGroup: true,
+          __groupType: '系统卡',
+          __isSystemGroup: true,
+          __parentCardId: n.id,
+          children: systemChildren.map(x => ({ ...x }))
+        })
+      }
       // 递归对子树继续处理（分组节点与普通节点都递归其 children）
       node.children = grouped.map((x: any) => {
         const copy = { ...x }
+        if (!copy.__isGroup) copy.label = getSystemCardDisplayTitle(copy.title || '')
         if (Array.isArray(copy.children) && copy.children.length > 0) {
           copy.children = buildGroupedNodes(copy.children as any)
         }
         return copy
       })
     }
+    if (!(node as any).__isGroup) (node as any).label = getSystemCardDisplayTitle(node.title || '')
     return node
   })
 }
 
 // 基于原始 cardTree 计算带分组的树
-const groupedTree = computed(() => buildGroupedNodes(cardTree.value as unknown as any[]))
+const groupedTree = computed(() => {
+  const roots = cardTree.value as unknown as any[]
+  const systemRoots = roots.filter((node: any) => isSystemCardTitle(node?.title || ''))
+  const normalRoots = roots.filter((node: any) => !isSystemCardTitle(node?.title || ''))
+  const groupedNormalRoots = buildGroupedNodes(normalRoots)
+
+  if (systemRoots.length === 0) {
+    return groupedNormalRoots
+  }
+
+  return [
+    ...groupedNormalRoots,
+    {
+      id: 'group:root:系统卡',
+      title: '系统卡',
+      label: '系统卡',
+      __isGroup: true,
+      __isSystemGroup: true,
+      __groupType: '系统卡',
+      __parentCardId: null,
+      children: buildGroupedNodes(systemRoots)
+    }
+  ]
+})
 
 // Local State
 const activeTab = ref('market')
@@ -1109,6 +1156,8 @@ function getIconByCardType(typeName?: string) {
       return User
     case '场景卡':
       return OfficeBuilding
+    case '系统卡':
+      return Tickets
     default:
       return Document // 通用默认图标
   }
@@ -1280,7 +1329,7 @@ async function renameCard(cardId: number, oldTitle: string) {
 
     // 仅对章节大纲 / 章节正文做「标题字段与卡片名」的绑定优化
     const typeName = card?.card_type?.name || ''
-    if ((typeName === '章节大纲' || typeName === '章节正文') && card?.content) {
+    if ((typeName === '章节大纲' || typeName === '章节正文' || typeName === '增强章节大纲' || typeName === '增强章节正文') && card?.content) {
       const content: any = { ...(card.content as any) }
       content.title = newTitle
       payload.content = content
@@ -1300,7 +1349,8 @@ const assistantParams = ref<{ llm_config_id: number | null; prompt_name: string 
 
 // 判断当前是否为章节正文卡片
 const isChapterContent = computed(() => {
-  return activeCard.value?.card_type?.name === '章节正文'
+  const typeName = activeCard.value?.card_type?.name
+  return typeName === '章节正文' || typeName === '增强章节正文'
 })
 
 // 章节信息提取

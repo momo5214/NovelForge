@@ -41,15 +41,71 @@
 			<!-- AI功能组 -->
 			<div class="toolbar-group">
 				<span class="group-label">AI</span>
+				<el-button
+					v-if="isChapterBodyCard"
+					type="success"
+					size="small"
+					:loading="aiLoading"
+					@click="executeChapterDraftGeneration"
+				>
+					<el-icon><MagicStick /></el-icon> 生成章节
+				</el-button>
+				<el-button
+					v-if="isEnhancedChapterBodyCard && candidateCharacterCount > 0"
+					type="primary"
+					plain
+					size="small"
+					:loading="aiLoading"
+					@click="executeConfirmCandidateCharacters"
+				>
+					<el-icon><Select /></el-icon> 确认建卡{{ candidateCharacterCount > 0 ? `(${candidateCharacterCount})` : '' }}
+				</el-button>
 				<el-button type="primary" size="small" :loading="aiLoading" @click="executeAIContinuation">
 					<el-icon><MagicStick /></el-icon> 续写
+				</el-button>
+				<el-button
+					v-if="isEnhancedChapterBodyCard && showEnhancedPostprocessRetry"
+					type="success"
+					size="small"
+					:loading="aiLoading"
+					@click="executeEnhancedChapterPostprocessWorkflow"
+				>
+					<el-icon><Connection /></el-icon> 重试
+				</el-button>
+				<el-button
+					v-if="isEnhancedChapterBodyCard"
+					type="success"
+					plain
+					size="small"
+					:loading="aiLoading"
+					@click="executeFinalizeDraft"
+				>
+					<el-icon><Select /></el-icon> 定稿
+				</el-button>
+				<el-button
+					v-if="isEnhancedChapterBodyCard"
+					type="warning"
+					size="small"
+					:loading="aiLoading"
+					@click="executeChapterReview"
+				>
+					<el-icon><Connection /></el-icon> 审校
+				</el-button>
+				<el-button
+					v-if="isEnhancedChapterBodyCard"
+					type="info"
+					size="small"
+					:loading="aiLoading"
+					@click="executeRewriteByReview"
+				>
+					<el-icon><List /></el-icon> 改写
 				</el-button>
 				
 				<el-button-group size="small">
 					<el-button plain :loading="aiLoading" @click="executePolish">
 						<el-icon><Document /></el-icon> 润色
 					</el-button>
-					<el-dropdown @command="handlePolishPromptChange" trigger="click">
+					<el-dropdown v-if="polishPrompts.length > 1" @command="handlePolishPromptChange" trigger="click">
 						<el-button plain :loading="aiLoading">
 							<el-icon><ArrowDown /></el-icon>
 						</el-button>
@@ -75,7 +131,7 @@
 					<el-button plain :loading="aiLoading" @click="executeExpand">
 						<el-icon><MagicStick /></el-icon> 扩写
 					</el-button>
-					<el-dropdown @command="handleExpandPromptChange" trigger="click">
+					<el-dropdown v-if="expandPrompts.length > 1" @command="handleExpandPromptChange" trigger="click">
 						<el-button plain :loading="aiLoading">
 							<el-icon><ArrowDown /></el-icon>
 						</el-button>
@@ -258,14 +314,15 @@
 
 <script setup lang="ts">
 import { ref, reactive, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { storeToRefs } from 'pinia'
 import { useCardStore } from '@renderer/stores/useCardStore'
 import { useProjectStore } from '@renderer/stores/useProjectStore'
 import { usePerCardAISettingsStore, type PerCardAIParams } from '@renderer/stores/usePerCardAISettingsStore'
 import { useEditorStore } from '@renderer/stores/useEditorStore'
-import type { CardRead, CardUpdate } from '@renderer/api/cards'
+import { confirmCandidateCharacters, type CardRead, type CardUpdate } from '@renderer/api/cards'
 import { generateContinuationStreaming, type ContinuationRequest, getAIConfigOptions, type AIConfigOptions } from '@renderer/api/ai'
+import { getRun, listWorkflows, runCodeWorkflowStream } from '@renderer/api/workflows'
 import { getCardAIParams, updateCardAIParams, applyCardAIParamsToType } from '@renderer/api/setting'
 import { extractDynamicInfoOnly, updateDynamicInfoOnly, type UpdateDynamicInfoOutput, extractRelationsOnly, ingestRelationsFromPreview, type RelationExtractionOutput } from '@renderer/api/memory'
 import { ArrowDown, Document, MagicStick, CircleClose, Connection, List, Timer, Select } from '@element-plus/icons-vue'
@@ -289,6 +346,9 @@ const projectStore = useProjectStore()
 const perCardStore = usePerCardAISettingsStore()
 const editorStore = useEditorStore()
 const { cards } = storeToRefs(cardStore)
+
+const CHAPTER_BODY_TYPE_NAMES = new Set(['章节正文', '增强章节正文'])
+const ENHANCED_CHAPTER_BODY_TYPE_NAME = '增强章节正文'
 
 const ready = ref(false)
 const cmRoot = ref<HTMLElement | null>(null)
@@ -369,6 +429,57 @@ const paramSummary = computed(() => {
 	const t = p?.temperature != null ? `温度:${p.temperature}` : ''
 	const m = p?.max_tokens != null ? `max_tokens:${p.max_tokens}` : ''
 	return [model, prompt, t, m].filter(Boolean).join(' · ')
+})
+
+const isChapterBodyCard = computed(() => CHAPTER_BODY_TYPE_NAMES.has(String(props.card?.card_type?.name || '')))
+const isEnhancedChapterBodyCard = computed(() => String(props.card?.card_type?.name || '') === ENHANCED_CHAPTER_BODY_TYPE_NAME)
+
+const ENHANCED_CHAPTER_REVIEW_PROMPT_NAME = '增强一致性审校-续写版'
+const ENHANCED_CHAPTER_REWRITE_PROMPT_NAME = '增强章节改写-续写版'
+const ENHANCED_CHAPTER_WORKFLOW_NAME = '增强章节闭环'
+const ENHANCED_CHAPTER_CANDIDATE_WORKFLOW_NAME = '增强章节前置角色准备'
+const ENHANCED_CHAPTER_POSTPROCESS_WORKFLOW_NAME = '增强章节后处理闭环'
+const ENHANCED_DRAFT_STATUS = {
+	DRAFT: 'draft',
+	REVIEWED: 'reviewed',
+	REWRITTEN: 'rewritten',
+	FINALIZED: 'finalized',
+} as const
+type EnhancedDraftStatus = typeof ENHANCED_DRAFT_STATUS[keyof typeof ENHANCED_DRAFT_STATUS]
+const currentEnhancedDraftStatus = computed<EnhancedDraftStatus | ''>(() => {
+	try {
+		return String((localCard.content as any)?.draft_status || '') as EnhancedDraftStatus | ''
+	} catch {
+		return ''
+	}
+})
+const isEnhancedDraftFinalized = computed(() => currentEnhancedDraftStatus.value === ENHANCED_DRAFT_STATUS.FINALIZED)
+const currentEnhancedPostprocessStatus = computed(() => {
+	try {
+		return String((localCard.content as any)?.postprocess_status || '')
+	} catch {
+		return ''
+	}
+})
+const currentEnhancedPostprocessRunId = computed<number | undefined>(() => {
+	try {
+		const raw = (localCard.content as any)?.postprocess_run_id
+		const value = Number(raw)
+		return Number.isFinite(value) && value > 0 ? value : undefined
+	} catch {
+		return undefined
+	}
+})
+const showEnhancedPostprocessRetry = computed(() => (
+	isEnhancedDraftFinalized.value && currentEnhancedPostprocessStatus.value === 'failed'
+))
+const candidateCharacterCount = computed(() => {
+	try {
+		const items = (localCard.content as any)?.candidate_characters
+		return Array.isArray(items) ? items.length : 0
+	} catch {
+		return 0
+	}
 })
 
 watch(() => props.card, async (newCard) => {
@@ -514,6 +625,7 @@ const pendingAiEdit = ref<{
 	previewFrom: number
 	previewTo: number
 	generating: boolean
+	sourceTask?: string
 } | null>(null)
 
 let allowPendingPreviewDocMutation = false
@@ -779,26 +891,29 @@ async function loadPrompts() {
 	try {
 		const options = await getAIConfigOptions()
 		const allPrompts = options?.prompts || []
-		
-		// 获取所有提示词名称
 		const allPromptNames = allPrompts.map(p => p.name)
-		
-		// 润色和扩写都使用所有可用提示词
-		polishPrompts.value = allPromptNames.length > 0 ? allPromptNames : ['润色']
-		expandPrompts.value = allPromptNames.length > 0 ? allPromptNames : ['扩写']
-		
-		// 设置默认选中的提示词
-		if (allPromptNames.includes('润色')) {
-			currentPolishPrompt.value = '润色'
-		} else if (allPromptNames.length > 0) {
-			currentPolishPrompt.value = allPromptNames[0]
+
+		const polishKeywords = ['润色', '去AI味']
+		const expandKeywords = ['扩写']
+
+		const matchByKeywords = (keywords: string[]) => {
+			const matched = allPromptNames.filter(name => keywords.some(keyword => name.includes(keyword)))
+			return Array.from(new Set(matched))
 		}
-		
-		if (allPromptNames.includes('扩写')) {
-			currentExpandPrompt.value = '扩写'
-		} else if (allPromptNames.length > 0) {
-			currentExpandPrompt.value = allPromptNames[0]
-		}
+
+		const filteredPolishPrompts = matchByKeywords(polishKeywords)
+		const filteredExpandPrompts = matchByKeywords(expandKeywords)
+
+		polishPrompts.value = filteredPolishPrompts.length > 0 ? filteredPolishPrompts : ['润色']
+		expandPrompts.value = filteredExpandPrompts.length > 0 ? filteredExpandPrompts : ['扩写']
+
+		currentPolishPrompt.value = polishPrompts.value.includes('润色')
+			? '润色'
+			: polishPrompts.value[0]
+
+		currentExpandPrompt.value = expandPrompts.value.includes('扩写')
+			? '扩写'
+			: expandPrompts.value[0]
 	} catch (e) {
 		console.error('Failed to load prompts:', e)
 		polishPrompts.value = ['润色']
@@ -883,7 +998,7 @@ async function handleSave(newTitle?: string) {
 		const typeName = (props.card as any)?.card_type?.name || ''
 		const needDynamic = isDynamicAutoExtractEnabled()
 		const needRelations = isRelationsAutoExtractEnabled()
-		if (typeName === '章节正文' && (needDynamic || needRelations)) {
+		if (CHAPTER_BODY_TYPE_NAMES.has(typeName) && (needDynamic || needRelations)) {
 			const llmConfigId = resolveLlmConfigId()
 			if (llmConfigId) {
 				if (needDynamic) {
@@ -913,6 +1028,11 @@ function resolveLlmConfigId(): number | undefined {
 function resolvePromptName(): string | undefined {
 	const p = perCardParams.value || editingParams.value
 	return p?.prompt_name
+}
+
+function resolveChapterDraftPromptName(): string {
+	if (isEnhancedChapterBodyCard.value) return '增强章节正文草稿-续写版'
+	return resolvePromptName() || '内容生成'
 }
 
 function resolveSampling() {
@@ -956,6 +1076,144 @@ function formatFactsFromContext(ctx: any | null | undefined): string {
 		const subgraph = (ctx as any)?.facts_subgraph
 		return subgraph ? String(subgraph) : ''
 	} catch { return '' }
+}
+
+function resolveCurrentCardForAI(contentText: string) {
+	return {
+		...props.card,
+		content: {
+			...localCard.content,
+			content: contentText
+		}
+	}
+}
+
+function resolveCurrentCardContextTemplate(contentText: string): string {
+	try {
+		const aiContextTemplate = (props.card as any)?.ai_context_template || ''
+		if (!aiContextTemplate) return ''
+		return resolveTemplate({
+			template: aiContextTemplate,
+			cards: cards.value,
+			currentCard: resolveCurrentCardForAI(contentText) as any
+		})
+	} catch (e) {
+		console.error('Failed to resolve ai_context_template:', e)
+		return ''
+	}
+}
+
+function getCurrentChapterMeta() {
+	const rawChapterNumber =
+		(localCard.content as any)?.chapter_number
+		?? (props.contextParams as any)?.chapter_number
+		?? (props.card.content as any)?.chapter_number
+		?? 0
+	const chapterNumber = Number(rawChapterNumber) || 0
+	const chapterTitle = String(
+		(localCard.content as any)?.title
+		|| localCard.title
+		|| props.card.title
+		|| ''
+	).trim()
+	return {
+		chapterNumber,
+		chapterTitle,
+		parentId: (props.card as any)?.parent_id ?? null,
+	}
+}
+
+function normalizeCurrentChapterTitle(chapterNumber: number, rawTitle: string): string {
+	const title = String(rawTitle || '').trim()
+	if (!title || !chapterNumber) return title
+	const duplicatedPrefix = new RegExp(`^第${chapterNumber}章(?:[\\s\\-:：、.．]*)`)
+	return title.replace(duplicatedPrefix, '').trim() || title
+}
+
+function buildCurrentChapterReviewTitle() {
+	const meta = getCurrentChapterMeta()
+	const normalizedChapterTitle = normalizeCurrentChapterTitle(meta.chapterNumber, meta.chapterTitle)
+	return `一致性审校-第${meta.chapterNumber}章-${normalizedChapterTitle}`
+}
+
+function findCurrentChapterReviewCard(): CardRead | null {
+	const meta = getCurrentChapterMeta()
+	const sameParent = (cards.value || []).filter((card: any) => (card?.parent_id ?? null) === meta.parentId)
+	const matches = sameParent
+		.filter((card: any) => {
+			const title = String(card?.title || '')
+			return title.startsWith(`一致性审校-第${meta.chapterNumber}章-`)
+				|| title.startsWith(`ANG.M2/一致性审校报告-第${meta.chapterNumber}章`)
+		})
+		.sort((a: any, b: any) => new Date(String(b?.created_at || 0)).getTime() - new Date(String(a?.created_at || 0)).getTime())
+	return matches[0] || null
+}
+
+async function ensureCardTypeIdByName(name: string): Promise<number | null> {
+	let found = (cardStore.cardTypes || []).find((ct: any) => ct?.name === name)
+	if (found?.id) return Number(found.id)
+	try {
+		await cardStore.fetchCardTypes()
+	} catch {}
+	found = (cardStore.cardTypes || []).find((ct: any) => ct?.name === name)
+	return found?.id ? Number(found.id) : null
+}
+
+function createBaseContinuationRequest(promptName: string, contextInfoBlock: string, llmConfigId: number): ContinuationRequest {
+	const requestData: ContinuationRequest = {
+		previous_content: '',
+		context_info: contextInfoBlock,
+		llm_config_id: llmConfigId,
+		stream: true,
+		prompt_name: promptName,
+		append_continuous_novel_directive: false,
+		...(props.contextParams || {}) as any,
+	} as any
+	try {
+		const { temperature, max_tokens, timeout } = resolveSampling()
+		if (typeof temperature === 'number') (requestData as any).temperature = temperature
+		if (typeof max_tokens === 'number') (requestData as any).max_tokens = max_tokens
+		if (typeof timeout === 'number') (requestData as any).timeout = timeout
+	} catch {}
+	try {
+		const autoParticipants = extractParticipantsForCurrentChapter()
+		if (autoParticipants.length) (requestData as any).participants = autoParticipants
+	} catch {}
+	applyContinuationScope(requestData)
+	return requestData
+}
+
+async function streamPlainTextTask(requestData: ContinuationRequest, taskName: string): Promise<string> {
+	aiLoading.value = true
+	let accumulated = ''
+	return await new Promise<string>((resolve, reject) => {
+		streamHandle = generateContinuationStreaming(
+			requestData,
+			(chunk) => {
+				if (!chunk) return
+				if (!accumulated) {
+					accumulated = chunk
+					return
+				}
+				if (chunk.startsWith(accumulated)) {
+					accumulated = chunk
+					return
+				}
+				accumulated += chunk
+			},
+			() => {
+				aiLoading.value = false
+				streamHandle = null
+				resolve(String(accumulated || '').trim())
+			},
+			(error) => {
+				aiLoading.value = false
+				streamHandle = null
+				console.error(`${taskName}失败:`, error)
+				reject(error)
+			}
+		)
+	})
 }
 
 async function executeAIContinuation() {
@@ -1030,6 +1288,548 @@ async function executeAIContinuation() {
 	let accumulated = ''
 
 	executeAIGeneration(requestData, false, '续写')
+}
+
+async function executeChapterDraftGeneration() {
+	if (!ensureNoPendingAiEdit()) return
+	const llmConfigId = resolveLlmConfigId()
+	if (!llmConfigId) { ElMessage.error('请先设置有效的模型ID'); return }
+
+	const promptName = resolveChapterDraftPromptName()
+	const existingText = getText()
+	const hasExistingContent = existingText.trim().length > 0
+
+	if (hasExistingContent) {
+		try {
+			await ElMessageBox.confirm(
+				'当前正文已有内容。是否基于最新大纲重新生成？将以替换建议的形式展示，你可以接受或拒绝。',
+				'重新生成章节',
+				{
+					type: 'warning',
+					confirmButtonText: '继续生成',
+					cancelButtonText: '取消',
+				}
+			)
+		} catch {
+			return
+		}
+	}
+
+	if (isEnhancedChapterBodyCard.value) {
+		const prepared = await executeEnhancedWorkflowByName(ENHANCED_CHAPTER_CANDIDATE_WORKFLOW_NAME, {
+			successMessage: '候选角色已更新',
+			includeLlmConfigParam: true,
+			silentSuccess: true,
+		})
+		if (!prepared) return
+	}
+
+	aiLoading.value = true
+
+	let resolvedContextTemplate = ''
+	try {
+		const aiContextTemplate = (props.card as any)?.ai_context_template || ''
+		if (aiContextTemplate) {
+			const currentCardWithContent = {
+				...props.card,
+				content: {
+					...localCard.content,
+					content: hasExistingContent ? '' : existingText,
+				}
+			}
+			resolvedContextTemplate = resolveTemplate({
+				template: aiContextTemplate,
+				cards: cards.value,
+				currentCard: currentCardWithContent as any
+			})
+		}
+	} catch (e) {
+		console.error('Failed to resolve ai_context_template:', e)
+	}
+
+	const contextParts: string[] = []
+	if (resolvedContextTemplate) {
+		contextParts.push(`【引用上下文】\n${resolvedContextTemplate}`)
+	}
+	const contextInfoBlock = contextParts.join('\n\n')
+
+	const requestData: ContinuationRequest = {
+		previous_content: '',
+		context_info: contextInfoBlock,
+		existing_word_count: 0,
+		llm_config_id: llmConfigId,
+		stream: true,
+		prompt_name: promptName,
+		...(props.contextParams || {}) as any,
+	} as any
+
+	try {
+		const { temperature, max_tokens, timeout } = resolveSampling()
+		if (typeof temperature === 'number') (requestData as any).temperature = temperature
+		if (typeof max_tokens === 'number') (requestData as any).max_tokens = max_tokens
+		if (typeof timeout === 'number') (requestData as any).timeout = timeout
+	} catch {}
+
+	try {
+		const autoParticipants = extractParticipantsForCurrentChapter()
+		if (autoParticipants.length) (requestData as any).participants = autoParticipants
+	} catch {}
+
+	applyContinuationScope(requestData)
+
+	if (hasExistingContent) {
+		executeAIGeneration(requestData, true, '生成章节', 0, view?.state.doc.length ?? 0)
+		return
+	}
+
+	if (view) {
+		view.focus()
+		view.dispatch({ selection: { anchor: 0 } })
+	}
+	executeAIGeneration(requestData, false, '生成章节')
+}
+
+async function executeEnhancedWorkflowByName(workflowName: string, options?: {
+	successMessage?: string
+	confirmTitle?: string
+	confirmMessage?: string
+	requireExistingText?: boolean
+	includeLlmConfigParam?: boolean
+	silentSuccess?: boolean
+	resumeRunId?: number
+	onRunStarted?: (runId: number) => void | Promise<void>
+	onFailure?: (payload: { runId?: number; error: string; statement?: any }) => void | Promise<void>
+	onSuccess?: (payload: { runId?: number; resumed: boolean }) => void | Promise<void>
+}): Promise<boolean> {
+	const projectId =
+		(projectStore.currentProject?.id as number | undefined)
+		?? ((localCard as any)?.project_id as number | undefined)
+		?? ((props.card as any)?.project_id as number | undefined)
+		?? ((props.contextParams as any)?.project_id as number | undefined)
+	if (!projectId || !Number.isFinite(projectId)) {
+		ElMessage.error('未找到当前项目，无法执行增强章节闭环')
+		return false
+	}
+
+	const shouldIncludeLlmConfigParam = options?.includeLlmConfigParam !== false
+	const llmConfigId = shouldIncludeLlmConfigParam ? resolveLlmConfigId() : undefined
+	if (shouldIncludeLlmConfigParam && !llmConfigId) {
+		ElMessage.error('请先设置有效的模型ID')
+		return false
+	}
+
+	const existingText = getText().trim()
+	if (options?.requireExistingText && !existingText) {
+		ElMessage.warning('当前章节正文为空，无法执行闭环')
+		return false
+	}
+
+	let workflowId: number | undefined
+	try {
+		const workflows = await listWorkflows()
+		workflowId = workflows.find((item) => item.name === workflowName && item.is_active !== false)?.id
+	} catch (error) {
+		console.error('读取工作流列表失败:', error)
+		ElMessage.error('读取工作流失败')
+		return false
+	}
+	if (!workflowId) {
+		ElMessage.error(`未找到工作流：${workflowName}`)
+		return false
+	}
+
+	if (options?.confirmMessage && existingText) {
+		try {
+			await ElMessageBox.confirm(
+				options.confirmMessage,
+				options.confirmTitle || '执行工作流',
+				{
+					type: 'warning',
+					confirmButtonText: '继续执行',
+					cancelButtonText: '取消',
+				}
+			)
+		} catch {
+			return false
+		}
+	}
+
+	aiLoading.value = true
+	let workflowFailed = false
+	let workflowError = ''
+	let workflowErrorStatement: any = undefined
+	const resumeRunId = options?.resumeRunId
+	const shouldResume = typeof resumeRunId === 'number' && resumeRunId > 0
+
+	const workflowParams: Record<string, any> = {
+		project_id: projectId,
+		target_card_id: props.card.id,
+	}
+	if (shouldIncludeLlmConfigParam && llmConfigId) {
+		workflowParams.llm_config_id = llmConfigId
+	}
+
+	try {
+		return await new Promise<boolean>(async (resolve) => {
+			const { eventSource, runId } = await runCodeWorkflowStream(
+				workflowId,
+				{
+					onRunStarted: async (startedRunId) => {
+						await options?.onRunStarted?.(startedRunId)
+					},
+					onError: (event) => {
+						workflowFailed = true
+						workflowError = String((event as any)?.error || '工作流执行失败')
+						workflowErrorStatement = (event as any)?.statement
+					},
+					onEnd: async () => {
+						try {
+							await cardStore.fetchCards(projectId)
+							const refreshedCard = cards.value.find((card) => card.id === props.card.id)
+							if (refreshedCard) {
+								localCard.title = refreshedCard.title
+								localCard.content = { ...(refreshedCard.content as any || {}) }
+								const text = String((refreshedCard.content as any)?.content || '')
+								if (view && getText() !== text) setText(text)
+								originalContent.value = text
+								isDirty.value = false
+								emit('update:dirty', false)
+							}
+							if (workflowFailed) {
+								await options?.onFailure?.({
+									runId: runId.value || resumeRunId,
+									error: workflowError || '工作流执行失败',
+									statement: workflowErrorStatement,
+								})
+								ElMessage.error(workflowError || '增强章节闭环执行失败')
+							} else {
+								await options?.onSuccess?.({
+									runId: runId.value || resumeRunId,
+									resumed: shouldResume,
+								})
+								if (!options?.silentSuccess) {
+									ElMessage.success(options?.successMessage || '工作流执行完成')
+								}
+							}
+						} finally {
+							aiLoading.value = false
+							streamHandle = null
+							resolve(!workflowFailed)
+						}
+					},
+				},
+				shouldResume,
+				resumeRunId,
+				workflowParams
+			)
+
+			streamHandle = {
+				cancel: () => {
+					try { eventSource.close() } catch {}
+				}
+			}
+		})
+	} catch (error) {
+		console.error('执行增强章节闭环失败:', error)
+		aiLoading.value = false
+		streamHandle = null
+		ElMessage.error('执行工作流失败')
+		return false
+	}
+}
+
+async function executeEnhancedChapterClosureWorkflow() {
+	await executeEnhancedWorkflowByName(ENHANCED_CHAPTER_WORKFLOW_NAME, {
+		successMessage: '增强章节闭环执行完成，已更新正文、审校与伏笔台账',
+		confirmTitle: '执行增强章节闭环',
+		confirmMessage: '当前正文已有内容。增强章节闭环会直接覆盖该卡正文，并继续执行审校、伏笔治理和摘要更新。是否继续？',
+		requireExistingText: false,
+	})
+}
+
+async function executeConfirmCandidateCharacters() {
+	if (!isEnhancedChapterBodyCard.value || candidateCharacterCount.value <= 0) return
+	const projectId =
+		(projectStore.currentProject?.id as number | undefined)
+		?? ((localCard as any)?.project_id as number | undefined)
+		?? ((props.card as any)?.project_id as number | undefined)
+		?? ((props.contextParams as any)?.project_id as number | undefined)
+	if (!projectId || !Number.isFinite(projectId)) {
+		ElMessage.error('未找到当前项目，无法确认候选角色')
+		return
+	}
+	try {
+		await ElMessageBox.confirm(
+			`将把当前章节的 ${candidateCharacterCount.value} 个候选角色转成正式角色卡，并清空候选列表。是否继续？`,
+			'确认新增角色建卡',
+			{
+				type: 'warning',
+				confirmButtonText: '确认建卡',
+				cancelButtonText: '取消',
+			}
+		)
+	} catch {
+		return
+	}
+
+	aiLoading.value = true
+	try {
+		const result = await confirmCandidateCharacters(props.card.id)
+		await cardStore.fetchCards(projectId)
+		const refreshedCard = cards.value.find((card) => card.id === props.card.id)
+		if (refreshedCard) {
+			localCard.title = refreshedCard.title
+			localCard.content = { ...(refreshedCard.content as any || {}) }
+			const text = String((refreshedCard.content as any)?.content || '')
+			if (view && getText() !== text) setText(text)
+			originalContent.value = text
+			isDirty.value = false
+			emit('update:dirty', false)
+		}
+		ElMessage.success(`已确认建卡 ${result.created_card_count || 0} 个角色`)
+	} catch (error) {
+		console.error('确认候选角色失败:', error)
+		ElMessage.error('确认候选角色失败')
+	} finally {
+		aiLoading.value = false
+	}
+}
+
+async function executeEnhancedChapterPostprocessWorkflow() {
+	if (!isEnhancedDraftFinalized.value) {
+		ElMessage.warning('请先完成审校、改写并定稿，再执行后续闭环')
+		return
+	}
+	let resumeRunId = currentEnhancedPostprocessStatus.value === 'failed'
+		? currentEnhancedPostprocessRunId.value
+		: undefined
+	if (resumeRunId) {
+		try {
+			await getRun(resumeRunId)
+		} catch (error) {
+			console.warn('后处理断点运行记录不存在，改为重新执行:', error)
+			resumeRunId = undefined
+			ElMessage.warning('上次后处理运行记录已失效，本次将重新执行，不走断点重试')
+		}
+	}
+	localCard.content = {
+		...(localCard.content || {}),
+		postprocess_status: 'running',
+		postprocess_error: '',
+		postprocess_failed_node: '',
+	} as any
+	const ok = await executeEnhancedWorkflowByName(ENHANCED_CHAPTER_POSTPROCESS_WORKFLOW_NAME, {
+		successMessage: resumeRunId
+			? '增强章节后处理断点重试完成，已跳过成功步骤并补齐剩余结果'
+			: '增强章节后处理执行完成，已更新剧情要点、伏笔台账、摘要与角色状态',
+		confirmTitle: resumeRunId ? '重试增强章节后处理' : '执行增强章节后处理',
+		confirmMessage: resumeRunId
+			? '检测到上一次增强章节后处理失败。本次将从失败节点继续，已成功的步骤会自动跳过。是否继续？'
+			: '将基于当前定稿正文执行剧情要点整理、伏笔治理、前情摘要和角色状态更新，不会重新生成正文，也不会重复执行当前章审校。是否继续？',
+		requireExistingText: true,
+		includeLlmConfigParam: false,
+		resumeRunId,
+		onRunStarted: async (runId) => {
+			await persistEnhancedDraftStatus(ENHANCED_DRAFT_STATUS.FINALIZED, {
+				postprocess_status: 'running',
+				postprocess_error: '',
+				postprocess_failed_node: '',
+				postprocess_run_id: runId,
+				postprocess_started_at: new Date().toISOString(),
+				postprocess_finished_at: null,
+			})
+		},
+		onFailure: async ({ runId, error, statement }) => {
+			const failedNode = String(statement?.variable || '')
+			const failedDesc = String(statement?.description || failedNode || '')
+			const detail = failedDesc ? `${error}（失败节点：${failedDesc}）` : error
+			await persistEnhancedDraftStatus(ENHANCED_DRAFT_STATUS.FINALIZED, {
+				postprocess_status: 'failed',
+				postprocess_error: detail,
+				postprocess_failed_node: failedNode,
+				postprocess_run_id: runId || resumeRunId || null,
+				postprocess_finished_at: new Date().toISOString(),
+			})
+		},
+		onSuccess: async ({ runId }) => {
+			await persistEnhancedDraftStatus(ENHANCED_DRAFT_STATUS.FINALIZED, {
+				postprocess_status: 'succeeded',
+				postprocess_error: '',
+				postprocess_failed_node: '',
+				postprocess_run_id: runId || resumeRunId || null,
+				postprocess_finished_at: new Date().toISOString(),
+			})
+		},
+	})
+	if (!ok) return
+}
+
+async function persistEnhancedDraftStatus(status: EnhancedDraftStatus, extra: Record<string, any> = {}) {
+	const text = getText()
+	const nextContent = {
+		...localCard.content,
+		content: text,
+		word_count: wordCount.value,
+		title: (localCard.content as any)?.title || localCard.title,
+		draft_status: status,
+		...extra,
+	}
+	localCard.content = nextContent as any
+	await cardStore.modifyCard(localCard.id, {
+		content: nextContent as any,
+		needs_confirmation: false,
+	} as any)
+	originalContent.value = text
+	isDirty.value = false
+	emit('update:dirty', false)
+}
+
+async function executeChapterReview() {
+	if (!ensureNoPendingAiEdit()) return
+	const llmConfigId = resolveLlmConfigId()
+	if (!llmConfigId) { ElMessage.error('请先设置有效的模型ID'); return }
+
+	const chapterText = getText().trim()
+	if (!chapterText) {
+		ElMessage.warning('当前章节正文为空，无法审校')
+		return
+	}
+
+	const resolvedContextTemplate = resolveCurrentCardContextTemplate(chapterText)
+	const meta = getCurrentChapterMeta()
+	const contextParts: string[] = []
+	if (resolvedContextTemplate) contextParts.push(`【引用上下文】\n${resolvedContextTemplate}`)
+	contextParts.push(`【当前章信息】\n章节编号：第${meta.chapterNumber}章\n章节标题：${meta.chapterTitle}`)
+	contextParts.push(`【当前章正文】\n${chapterText}`)
+	const contextInfoBlock = contextParts.join('\n\n')
+
+	const requestData = createBaseContinuationRequest(ENHANCED_CHAPTER_REVIEW_PROMPT_NAME, contextInfoBlock, llmConfigId)
+	;(requestData as any).temperature = 0.35
+	;(requestData as any).max_tokens = Math.max(Number((requestData as any).max_tokens || 0), 4096)
+	;(requestData as any).timeout = Math.max(Number((requestData as any).timeout || 0), 180)
+
+	let reviewText = ''
+	try {
+		reviewText = await streamPlainTextTask(requestData, '审校')
+	} catch {
+		ElMessage.error('审校失败')
+		return
+	}
+
+	if (!reviewText.trim()) {
+		ElMessage.warning('审校结果为空，未创建审校卡')
+		return
+	}
+
+	const reviewTitle = buildCurrentChapterReviewTitle()
+	const existingReviewCard = findCurrentChapterReviewCard()
+
+	try {
+		if (existingReviewCard) {
+			await cardStore.modifyCard(existingReviewCard.id, {
+				title: reviewTitle,
+				content: {
+					...(existingReviewCard.content as any || {}),
+					content: reviewText
+				}
+			} as any)
+		} else {
+			const textCardTypeId = await ensureCardTypeIdByName('通用文本')
+			if (!textCardTypeId) {
+				ElMessage.error('未找到“通用文本”卡片类型，无法创建审校卡')
+				return
+			}
+			await cardStore.addCard({
+				title: reviewTitle,
+				card_type_id: textCardTypeId,
+				parent_id: (props.card as any)?.parent_id ?? undefined,
+				content: { content: reviewText }
+			} as any, { silent: true })
+		}
+		if (isEnhancedChapterBodyCard.value) {
+			await persistEnhancedDraftStatus(ENHANCED_DRAFT_STATUS.REVIEWED, {
+				reviewed_at: new Date().toISOString(),
+				review_card_title: reviewTitle,
+				finalized_at: null,
+				postprocess_status: '',
+				postprocess_error: '',
+			})
+		}
+		ElMessage.success('已生成当前章节的一致性审校卡')
+	} catch (e) {
+		console.error('保存审校卡失败:', e)
+		ElMessage.error('审校完成，但保存审校卡失败')
+	}
+}
+
+async function executeRewriteByReview() {
+	if (!ensureNoPendingAiEdit()) return
+	const llmConfigId = resolveLlmConfigId()
+	if (!llmConfigId) { ElMessage.error('请先设置有效的模型ID'); return }
+
+	const chapterText = getText().trim()
+	if (!chapterText) {
+		ElMessage.warning('当前章节正文为空，无法改写')
+		return
+	}
+
+	const reviewCard = findCurrentChapterReviewCard()
+	const reviewText = String((reviewCard?.content as any)?.content || '').trim()
+	if (!reviewText) {
+		ElMessage.warning('请先为当前章节执行审校')
+		return
+	}
+
+	const resolvedContextTemplate = resolveCurrentCardContextTemplate(chapterText)
+	const contextParts: string[] = []
+	if (resolvedContextTemplate) contextParts.push(`【引用上下文】\n${resolvedContextTemplate}`)
+	contextParts.push(`【当前章正文】\n${chapterText}`)
+	contextParts.push(`【审校结果】\n${reviewText}`)
+	const contextInfoBlock = contextParts.join('\n\n')
+
+	const requestData = createBaseContinuationRequest(ENHANCED_CHAPTER_REWRITE_PROMPT_NAME, contextInfoBlock, llmConfigId)
+	;(requestData as any).temperature = 0.55
+	;(requestData as any).max_tokens = Math.max(Number((requestData as any).max_tokens || 0), 8192)
+	;(requestData as any).timeout = Math.max(Number((requestData as any).timeout || 0), 180)
+
+	executeAIGeneration(requestData, true, '改写', 0, view?.state.doc.length ?? 0)
+}
+
+async function executeFinalizeDraft() {
+	if (!ensureNoPendingAiEdit()) return
+	if (!isEnhancedChapterBodyCard.value) return
+
+	const chapterText = getText().trim()
+	if (!chapterText) {
+		ElMessage.warning('当前章节正文为空，无法定稿')
+		return
+	}
+
+	const reviewCard = findCurrentChapterReviewCard()
+	const reviewText = String((reviewCard?.content as any)?.content || '').trim()
+	if (!reviewText) {
+		ElMessage.warning('请先完成当前章节审校，再执行定稿')
+		return
+	}
+
+	if (isDirty.value) {
+		await handleSave()
+	}
+
+	try {
+		await persistEnhancedDraftStatus(ENHANCED_DRAFT_STATUS.FINALIZED, {
+			finalized_at: new Date().toISOString(),
+			final_word_count: wordCount.value,
+			final_review_title: reviewCard?.title || buildCurrentChapterReviewTitle(),
+			postprocess_status: '',
+			postprocess_error: '',
+		})
+		ElMessage.success('当前章节已定稿，开始执行后续闭环')
+		await executeEnhancedChapterPostprocessWorkflow()
+	} catch (error) {
+		console.error('定稿失败:', error)
+		ElMessage.error('定稿失败')
+	}
 }
 
 function handlePolishPromptChange(promptName: string) {
@@ -1260,9 +2060,43 @@ function acceptPendingAiEdit() {
 			selection: { anchor: pending.originalFrom + previewText.length }
 		})
 	})
+	const acceptedTask = pending.sourceTask || ''
 	pendingAiEdit.value = null
 	clearHighlight()
 	ElMessage.success('已接受替换')
+	if (isEnhancedChapterBodyCard.value) {
+		if (acceptedTask === '改写') {
+			localCard.content = {
+				...(localCard.content || {}),
+				draft_status: ENHANCED_DRAFT_STATUS.REWRITTEN,
+				rewritten_at: new Date().toISOString(),
+				finalized_at: null,
+				postprocess_status: '',
+				postprocess_error: '',
+			} as any
+		} else if (acceptedTask === '生成章节' || acceptedTask === '续写') {
+			localCard.content = {
+				...(localCard.content || {}),
+				draft_status: ENHANCED_DRAFT_STATUS.DRAFT,
+				finalized_at: null,
+				postprocess_status: '',
+				postprocess_error: '',
+			} as any
+		}
+	}
+	if (acceptedTask === '改写' && isEnhancedChapterBodyCard.value) {
+		ElMessageBox.confirm(
+			'改写结果已应用。是否立即重新审校当前章节？',
+			'重新审校',
+			{
+				type: 'info',
+				confirmButtonText: '立即审校',
+				cancelButtonText: '稍后再说',
+			}
+		).then(() => {
+			executeChapterReview()
+		}).catch(() => {})
+	}
 }
 
 function rejectPendingAiEdit() {
@@ -1310,7 +2144,8 @@ function executeAIGeneration(
 				originalText,
 				previewFrom: replaceTo,
 				previewTo: replaceTo,
-				generating: true
+				generating: true,
+				sourceTask: taskName
 			}
 		}
 	}
@@ -1380,6 +2215,15 @@ function executeAIGeneration(
 			if (replaceMode) {
 				ElMessage.success(`${taskName}完成，已生成替换建议`)
 			} else {
+				if (isEnhancedChapterBodyCard.value) {
+					localCard.content = {
+						...(localCard.content || {}),
+						draft_status: ENHANCED_DRAFT_STATUS.DRAFT,
+						finalized_at: null,
+						postprocess_status: '',
+						postprocess_error: '',
+					} as any
+				}
 				ElMessage.success(`${taskName}完成！`)
 			}
 		},

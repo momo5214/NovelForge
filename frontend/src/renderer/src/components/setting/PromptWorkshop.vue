@@ -5,8 +5,16 @@
       <el-button type="primary" @click="handleCreate">新建提示词</el-button>
     </div>
     <el-table :data="prompts" style="width: 100%" v-loading="loading">
-      <el-table-column prop="name" label="名称" width="180" />
-      <el-table-column prop="description" label="描述" />
+      <el-table-column label="名称" width="240">
+        <template #default="{ row }">
+          {{ getDisplayName(row) }}
+        </template>
+      </el-table-column>
+      <el-table-column label="描述">
+        <template #default="{ row }">
+          {{ getDisplayDescription(row) }}
+        </template>
+      </el-table-column>
       <el-table-column label="操作" width="220">
         <template #default="{ row }">
           <el-button size="small" @click="handleEdit(row)">编辑</el-button>
@@ -101,6 +109,20 @@ interface Prompt {
 
 const DEFAULT_OUTPUT_FORMAT = '请严格根据提供的Json Schema返回结果'
 
+const ANG_M0_PROMPT_DISPLAY_MAP: Record<string, { name: string; description: string }> = {
+  'ANG.M0.architecture_step1_mission': { name: 'M0 架构步骤1：分卷使命宣言', description: '为整部作品定义分卷战略目标与卷级使命。' },
+  'ANG.M0.architecture_step2_worldview': { name: 'M0 架构步骤2：世界观与冲突发生器', description: '构建世界规则并生成推动剧情的核心冲突。' },
+  'ANG.M0.architecture_step3_plot': { name: 'M0 架构步骤3：情节线与推进机制', description: '设计主线/支线与关键推进节点。' },
+  'ANG.M0.architecture_step4_character': { name: '步骤四：核心角色规划', description: '生成服务后续角色建卡的角色规划稿。' },
+  'ANG.M0.architecture_step5_style': { name: 'M0 架构步骤5：叙事风格与文本策略', description: '确定叙事口吻、节奏与语言风格约束。' },
+  'ANG.M0.volume_design_format': { name: 'M0 分卷格式模板', description: '分卷输出的标准结构模板。' },
+  'ANG.M0.volume_outline': { name: 'M0 首卷分卷大纲', description: '生成首卷的卷级剧情与章节级推进方案。' },
+  'ANG.M0.subsequent_volume': { name: 'M0 中间卷分卷大纲', description: '生成中间卷递进结构与承接关系。' },
+  'ANG.M0.final_volume': { name: 'M0 终卷收束大纲', description: '生成终卷收束路径与主线回收方案。' },
+  'ANG.M0.chapter_blueprint': { name: 'M0 章节目录蓝图', description: '将卷级结构拆解为章节目录与每章目标。' },
+  'ANG.M0.chapter_draft': { name: 'M0 章节正文草稿', description: '根据章节蓝图生成正文草稿。' }
+}
+
 const prompts = ref<Prompt[]>([])
 const loading = ref(false)
 const drawerVisible = ref(false)
@@ -149,6 +171,16 @@ function composeTemplate(s: { role: string; skills: string; goals: string; knowl
   }
   if (s.outputFormat?.trim()) lines.push(`\n- OutputFormat: ${s.outputFormat.trim()}`)
   return lines.join('\n')
+}
+
+function getDisplayName(prompt: Prompt) {
+  return ANG_M0_PROMPT_DISPLAY_MAP[prompt.name]?.name || prompt.name
+}
+
+function getDisplayDescription(prompt: Prompt) {
+  const mapped = ANG_M0_PROMPT_DISPLAY_MAP[prompt.name]
+  if (mapped) return mapped.description
+  return prompt.description
 }
 
 async function fetchPrompts() {
@@ -218,7 +250,25 @@ function parseKnowledgeBlock(tpl: string) {
   knowledgeMode.value = mode
 }
 
-async function tryParseStructured(tpl?: string) {
+function parseLegacyM0Template(tpl: string) {
+  const role = /(?:^|\n)\s*AI角色\s*[:：]\s*(.+)/i.exec(tpl)?.[1]?.trim() || ''
+  const task = /(?:^|\n)\s*任务\s*[:：]\s*(.+)/i.exec(tpl)?.[1]?.trim() || ''
+  const output = /\[\s*最终输出格式\s*\]\s*([\s\S]*)$/i.exec(tpl)?.[1]?.trim() || DEFAULT_OUTPUT_FORMAT
+
+  const cleaned = tpl
+    .replace(/(?:^|\n)\s*AI角色\s*[:：].*/i, '\n')
+    .replace(/(?:^|\n)\s*任务\s*[:：].*/i, '\n')
+    .replace(/\[\s*最终输出格式\s*\][\s\S]*$/i, '')
+    .trim()
+
+  return {
+    role,
+    goals: task ? `任务：${task}\n\n${cleaned}`.trim() : cleaned,
+    outputFormat: output
+  }
+}
+
+function tryParseStructured(tpl?: string) {
   if (!tpl) return resetStructuredDefaults()
   // 粗略解析，仅在常见格式时填充字段，解析失败保持默认
   try {
@@ -226,23 +276,38 @@ async function tryParseStructured(tpl?: string) {
     const s = /-\s*Skills?:\s*([\s\S]*?)(?:\n-\s*Goals?:|\n-\s*knowledge:|\n-\s*OutputFormat\s*[:：]|$)/i.exec(tpl)
     const g = /-\s*Goals?:\s*([\s\S]*?)(?:\n-\s*knowledge:|\n-\s*OutputFormat\s*[:：]|$)/i.exec(tpl)
     const o = /-\s*OutputFormat\s*[:：]\s*([\s\S]*)/i.exec(tpl)
-    structured.value.role = r?.[1]?.trim() || ''
-    structured.value.skills = (s?.[1] || '').trim()
-    structured.value.goals = (g?.[1] || '').replace(/^\s*-\s*/gm, '').trim()
-    structured.value.outputFormat = (o?.[1] || DEFAULT_OUTPUT_FORMAT).trim()
-    // 解析知识库引用
+
+    const hasStructuredMarkers = !!(r || s || g || o)
+    if (hasStructuredMarkers) {
+      structured.value.role = r?.[1]?.trim() || ''
+      structured.value.skills = (s?.[1] || '').trim()
+      structured.value.goals = (g?.[1] || '').replace(/^\s*-\s*/gm, '').trim()
+      structured.value.outputFormat = (o?.[1] || DEFAULT_OUTPUT_FORMAT).trim()
+      parseKnowledgeBlock(tpl)
+      return
+    }
+
+    const legacy = parseLegacyM0Template(tpl)
+    structured.value.role = legacy.role
+    structured.value.skills = ''
+    structured.value.goals = legacy.goals
+    structured.value.outputFormat = legacy.outputFormat
     parseKnowledgeBlock(tpl)
   } catch {
     resetStructuredDefaults()
   }
 }
 
-async function handleEdit(prompt: any) {
+function handleEdit(prompt: any) {
   currentPrompt.value = { ...prompt }
-  await fetchKnowledgeList()
-  // 尝试解析为结构化表单，若失败则回退到原始模板模式
-  await tryParseStructured(prompt.template)
-  useStructured.value = false
+  fetchKnowledgeList()
+  // 尝试解析为结构化表单；仅在可识别结构化标记时默认开启结构化编辑
+  tryParseStructured(prompt.template)
+  const template = prompt.template || ''
+  const hasStructuredMarkers = /-\s*Role\s*:/i.test(template)
+    || /-\s*Goals\s*:/i.test(template)
+    || /-\s*OutputFormat\s*[:：]/i.test(template)
+  useStructured.value = hasStructuredMarkers
   drawerVisible.value = true
 }
 

@@ -27,6 +27,7 @@ import { ref, watch, computed } from 'vue'
 import { ElInput, ElSelect, ElOption, ElSegmented, ElIcon } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
 import type { components } from '@renderer/types/generated'
+import { getCardTypeDisplayName } from '@renderer/utils/cardTypeDisplay'
 
 const props = defineProps<{ cardTypes: components['schemas']['CardTypeRead'][] }>()
 const emit = defineEmits<{
@@ -42,7 +43,7 @@ const viewMode = ref<'卡片'|'列表'>('卡片')
 const densityOptions = [ '舒适', '紧凑' ]
 const viewOptions = [ '卡片', '列表' ]
 
-const typeOptions = computed(() => (props.cardTypes || []).map(t => ({ label: t.name, value: t.id! })))
+const typeOptions = computed(() => (props.cardTypes || []).map(t => ({ label: getCardTypeDisplayName(t.name), value: t.id! })))
 
 function emitChange() {
   emit('change', { keyword: keyword.value, types: selectedTypes.value, sortKey: sortKey.value, density: density.value, view: viewMode.value })

@@ -11,7 +11,7 @@
       <el-form-item v-if="!isEditMode" label="项目模板">
         <el-select v-model="selectedTemplate" placeholder="选择项目模板（可选）" filterable clearable :loading="loadingTemplates" style="width:100%">
           <el-option label="空白项目" :value="null" />
-          <el-option v-for="tpl in projectTemplates" :key="tpl.template" :label="tpl.workflow_name" :value="tpl.template" />
+          <el-option v-for="tpl in projectTemplates" :key="tpl.template" :label="tpl.display_name || tpl.workflow_name" :value="tpl.template" />
         </el-select>
       </el-form-item>
       <!-- 隐藏的提交按钮，确保在输入框按回车会触发表单提交 -->
@@ -37,9 +37,12 @@ type Project = components['schemas']['ProjectRead']
 type ProjectCreate = components['schemas']['ProjectCreate']
 type ProjectUpdate = components['schemas']['ProjectUpdate']
 
+const DEFAULT_TEMPLATE = 'enhanced'
+
 interface ProjectTemplate {
   workflow_id: number
   workflow_name: string
+  display_name?: string
   template: string | null
   description?: string
 }
@@ -72,8 +75,11 @@ async function loadProjectTemplates() {
     const response = await getProjectTemplates()
     projectTemplates.value = response.templates || []
     
-    // 默认选择第一个模板（如果有）
-    if (projectTemplates.value.length > 0) {
+    // 默认优先 snowflake；否则选择第一个模板
+    const preferred = projectTemplates.value.find((tpl) => tpl.template === DEFAULT_TEMPLATE)
+    if (preferred) {
+      selectedTemplate.value = preferred.template
+    } else if (projectTemplates.value.length > 0) {
       selectedTemplate.value = projectTemplates.value[0].template
     }
   } catch (error) {

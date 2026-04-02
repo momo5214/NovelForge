@@ -2,14 +2,14 @@
   <div class="generic-card-editor">
     <EditorHeader
       :project-name="projectName"
-      :card-type="props.card.card_type.name"
+      :card-type="cardTypeDisplayName"
       v-model:title="titleProxy"
       :dirty="isDirty"
       :saving="isSaving"
       :can-save="isDirty && !isSaving"
       :last-saved-at="lastSavedAt"
-      :is-chapter-content="!!activeContentEditor"
       :needs-confirmation="props.card.needs_confirmation"
+      :can-generate="canGenerate"
       @save="handleSave"
       @generate="handleGenerateClick"
       @open-context="openDrawer = true"
@@ -19,7 +19,12 @@
     
     <!-- 自定义内容编辑器（如 CodeMirrorEditor）-->
     <template v-if="activeContentEditor">
-      <component 
+      <div v-if="showInlineAiParams" class="toolbar-row param-toolbar">
+        <div class="param-inline">
+          <AIPerCardParams :card-id="props.card.id" :card-type-name="props.card.card_type?.name" />
+        </div>
+      </div>
+      <component
         :is="activeContentEditor"
         ref="contentEditorRef"
         :card="props.card"
@@ -43,12 +48,12 @@
         <div class="main-pane">
           <div v-if="schema" class="form-container">
             <template v-if="sections && sections.length">
-              <SectionedForm v-if="wrapperName" :schema="innerSchema" v-model="innerData" :sections="sections" />
-              <SectionedForm v-else :schema="schema" v-model="localData" :sections="sections" />
+              <SectionedForm v-if="wrapperName" :schema="innerSchema" v-model="innerData" :sections="sections" :exclude-fields="formExcludeFields" />
+              <SectionedForm v-else :schema="schema" v-model="localData" :sections="sections" :exclude-fields="formExcludeFields" />
             </template>
             <template v-else>
-              <ModelDrivenForm v-if="wrapperName" :schema="innerSchema" v-model="innerData" />
-              <ModelDrivenForm v-else :schema="schema" v-model="localData" />
+              <ModelDrivenForm v-if="wrapperName" :schema="innerSchema" v-model="innerData" :exclude-fields="formExcludeFields" />
+              <ModelDrivenForm v-else :schema="schema" v-model="localData" :exclude-fields="formExcludeFields" />
             </template>
           </div>
           <div v-else class="loading-or-error-container">
@@ -110,9 +115,10 @@ import { ref, watch, computed, nextTick, onMounted, onBeforeUnmount, defineAsync
 import { storeToRefs } from 'pinia'
 import { useCardStore } from '@renderer/stores/useCardStore'
 import { useAIStore } from '@renderer/stores/useAIStore'
-import { usePerCardAISettingsStore, type PerCardAIParams } from '@renderer/stores/usePerCardAISettingsStore'
-import { getCardAIParams, updateCardAIParams, applyCardAIParamsToType } from '@renderer/api/setting'
+import { usePerCardAISettingsStore, type PerCardAIParams, getPresetForCardType } from '@renderer/stores/usePerCardAISettingsStore'
+import { getCardAIParams } from '@renderer/api/setting'
 import { useProjectStore } from '@renderer/stores/useProjectStore'
+import { getCardTypeDisplayName } from '@renderer/utils/cardTypeDisplay'
 import { schemaService } from '@renderer/api/schema'
 import type { JSONSchema } from '@renderer/api/schema'
 import { getAIConfigOptions, type AIConfigOptions } from '@renderer/api/ai'
@@ -127,8 +133,6 @@ import { cloneDeep, isEqual } from 'lodash-es'
 import type { CardRead, CardUpdate } from '@renderer/api/cards'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { addVersion } from '@renderer/services/versionService'
-import { Setting } from '@element-plus/icons-vue'
-import { useAIStore as useAIStoreForOptions } from '@renderer/stores/useAIStore'
 import SchemaStudio from '../shared/SchemaStudio.vue'
 import AIPerCardParams from '../common/AIPerCardParams.vue'
 // 移除 AssistantSidebar 相关导入与逻辑
@@ -149,7 +153,6 @@ const cardStore = useCardStore()
 const aiStore = useAIStore()
 const perCardStore = usePerCardAISettingsStore()
 const projectStore = useProjectStore()
-const aiStoreForOptions = useAIStoreForOptions()
 
 const { cards } = storeToRefs(cardStore)
 
@@ -160,8 +163,6 @@ const schemaStudioVisible = ref(false)
 const assistantVisible = ref(false)
 const assistantResolvedContext = ref<string>('')
 const assistantEffectiveSchema = ref<any>(null)
-const prefetchedContext = ref<any>(null)
-
 // 指令流生成相关状态
 const showInitialPromptDialog = ref(false)
 const showGenerationPanel = ref(false)
@@ -189,6 +190,22 @@ const activeContentEditor = computed(() => {
   return null // null 表示使用默认的表单编辑器
 })
 
+const canGenerate = computed(() => {
+  const isAIEnabled = Boolean(props.card?.card_type?.is_ai_enabled)
+  if (!isAIEnabled) return false
+  return props.card?.card_type?.editor_component !== 'CodeMirrorEditor'
+})
+const showInlineAiParams = computed(() => Boolean(props.card?.card_type?.is_ai_enabled))
+const cardTypeDisplayName = computed(() => getCardTypeDisplayName(props.card?.card_type?.name))
+
+function getResolvedContextTemplateValue(): string {
+  const raw = localAiContextTemplate.value
+  if (typeof raw === 'string' && raw.trim()) {
+    return raw
+  }
+  return getEffectiveContextTemplate(props.card)
+}
+
 // 通用的内容编辑器引用（可以是 CodeMirrorEditor 或其他）
 const contentEditorRef = ref<any>(null)
 const contentEditorDirty = ref(false)
@@ -205,7 +222,8 @@ function handleContentEditorDirtyChange(dirty: boolean) {
 function openAssistant() {
   const editingContent = wrapperName.value ? innerData.value : localData.value
   const currentCardForResolve = { ...props.card, content: editingContent }
-  const resolved = resolveTemplate({ template: localAiContextTemplate.value, cards: cards.value, currentCard: currentCardForResolve as any })
+  const effectiveTemplate = getResolvedContextTemplateValue()
+  const resolved = resolveTemplate({ template: effectiveTemplate, cards: cards.value, currentCard: currentCardForResolve as any })
   assistantResolvedContext.value = resolved
   // 读取有效 Schema 作为对话指导
   import('@renderer/api/setting').then(async ({ getCardSchema }) => {
@@ -222,6 +240,174 @@ const localData = ref<any>({})
 const localAiContextTemplate = ref<string>('')
 const originalData = ref<any>({})
 const originalAiContextTemplate = ref<string>('')
+
+const ARCHITECTURE_STEP_PROMPTS: Record<number, string> = {
+  1: 'ANG.M0.architecture_step1_mission',
+  2: 'ANG.M0.architecture_step2_worldview',
+  3: 'ANG.M0.architecture_step3_plot',
+  4: 'ANG.M0.architecture_step4_character',
+  5: 'ANG.M0.architecture_step5_style'
+}
+
+const ARCHITECTURE_STEP_SYSTEM_FIELDS = ['step', 'step_name', 'prompt_name', 'ai_context_template']
+
+function isArchitectureStepCard(card?: CardRead | null): boolean {
+  return card?.card_type?.name === '小说架构步骤'
+}
+
+function getArchitectureStepNumber(card?: CardRead | null): number | null {
+  const stepVal = Number((card?.content as any)?.step)
+  return Number.isFinite(stepVal) && stepVal > 0 ? stepVal : null
+}
+
+function mergeArchitectureStepSystemFields(content: Record<string, any> | null | undefined): Record<string, any> {
+  const nextContent = content && typeof content === 'object' ? cloneDeep(content) : {}
+  if (!isArchitectureStepCard(props.card)) return nextContent
+
+  const existingContent = ((props.card?.content as any) && typeof props.card.content === 'object')
+    ? (props.card.content as Record<string, any>)
+    : {}
+
+  for (const field of ARCHITECTURE_STEP_SYSTEM_FIELDS) {
+    if (nextContent[field] === undefined && existingContent[field] !== undefined) {
+      nextContent[field] = existingContent[field]
+    }
+  }
+
+  return nextContent
+}
+
+const formExcludeFields = computed(() => {
+  return isArchitectureStepCard(props.card) ? ARCHITECTURE_STEP_SYSTEM_FIELDS : []
+})
+
+function getGenerationSchema(card: CardRead, sourceSchema: any) {
+  if (!isArchitectureStepCard(card)) {
+    return sourceSchema
+  }
+
+  const contentSchema = sourceSchema?.properties?.content || {
+    type: 'string',
+    title: '步骤内容',
+    description: '当前架构步骤正文内容',
+  }
+
+  return {
+    ...sourceSchema,
+    type: 'object',
+    properties: {
+      content: contentSchema,
+    },
+    required: ['content'],
+  }
+}
+
+function buildArchitectureStepContextTemplate(card: CardRead): string {
+  if (!isArchitectureStepCard(card)) return ''
+
+  const stepVal = getArchitectureStepNumber(card)
+  if (!stepVal) return ''
+
+  const lines: string[] = [
+    '作品标签: @作品标签.content',
+    '故事大纲: @故事大纲.content.overview'
+  ]
+
+  if (stepVal <= 1) {
+    lines.push('小说架构: @小说架构.content.content')
+  } else {
+    for (let i = 1; i < stepVal; i++) {
+      lines.push(`步骤${i}结果: @type:小说架构步骤[index=${i}].content.content`)
+    }
+  }
+
+  return lines.join('\n')
+}
+
+function getEffectiveContextTemplate(card: CardRead): string {
+  const instanceTemplate = card.ai_context_template
+  const contentTemplate = (card.content as any)?.ai_context_template
+  const architectureStepTemplate = buildArchitectureStepContextTemplate(card)
+  const typeDefault = (card.card_type as any)?.default_ai_context_template
+
+  if (architectureStepTemplate) {
+    const instanceText = typeof instanceTemplate === 'string' ? instanceTemplate.trim() : ''
+    const contentText = typeof contentTemplate === 'string' ? contentTemplate.trim() : ''
+    const defaultText = typeof typeDefault === 'string' ? typeDefault.trim() : ''
+
+    // 增强流程在 content 里写入步骤专用模板；只有当根字段是用户显式保存的自定义模板时才优先使用根字段。
+    if (instanceText && instanceText !== defaultText) {
+      return instanceTemplate!
+    }
+
+    if (contentText && contentText.includes('@')) {
+      return contentTemplate
+    }
+
+    if (instanceText) {
+      return instanceTemplate!
+    }
+
+    return architectureStepTemplate
+  }
+
+  if (typeof instanceTemplate === 'string' && instanceTemplate.trim()) {
+    return instanceTemplate
+  }
+
+  if (typeof contentTemplate === 'string' && contentTemplate.trim()) {
+    return contentTemplate
+  }
+
+  if (typeof typeDefault === 'string' && typeDefault.trim()) {
+    return typeDefault
+  }
+  return ''
+}
+
+function getEffectivePromptName(card: CardRead, params?: Partial<PerCardAIParams> | null): string | undefined {
+  if (isArchitectureStepCard(card)) {
+    const stepVal = getArchitectureStepNumber(card)
+    if (stepVal && ARCHITECTURE_STEP_PROMPTS[stepVal]) {
+      return ARCHITECTURE_STEP_PROMPTS[stepVal]
+    }
+  }
+
+  const contentPromptName = (card.content as any)?.prompt_name
+  if (typeof contentPromptName === 'string' && contentPromptName.trim()) {
+    return contentPromptName.trim()
+  }
+
+  const paramPromptName = params?.prompt_name
+  if (typeof paramPromptName === 'string' && paramPromptName.trim()) {
+    return paramPromptName.trim()
+  }
+
+  return undefined
+}
+
+function buildArchitectureStepGenerationData(currentCard: CardRead, allCards: CardRead[]): Record<string, any> {
+  if (!isArchitectureStepCard(currentCard)) return {}
+
+  const stepVal = getArchitectureStepNumber(currentCard)
+  if (!stepVal || stepVal <= 1) return {}
+
+  const sameParentSteps = allCards
+    .filter(card => card.card_type?.name === '小说架构步骤' && card.parent_id === currentCard.parent_id)
+    .sort((a, b) => a.display_order - b.display_order)
+
+  const data: Record<string, any> = {}
+  for (let i = 1; i < stepVal; i++) {
+    const stepCard = sameParentSteps.find(card => Number((card.content as any)?.step) === i)
+    const stepResult = String((stepCard?.content as any)?.content || '').trim()
+    if (stepResult) {
+      data[`step${i}_result`] = stepResult
+    }
+  }
+
+  return data
+}
+
 const schema = ref<JSONSchema | undefined>(undefined)
 const schemaIsLoading = ref(false)
 let atIndexForInsertion = -1
@@ -298,9 +484,10 @@ watch(
   async (newCard) => {
     if (newCard) {
       localData.value = cloneDeep(newCard.content) || {}
-      localAiContextTemplate.value = newCard.ai_context_template || ''
+      const effectiveContextTemplate = getEffectiveContextTemplate(newCard)
+      localAiContextTemplate.value = effectiveContextTemplate
       originalData.value = cloneDeep(newCard.content) || {}
-      originalAiContextTemplate.value = newCard.ai_context_template || ''
+      originalAiContextTemplate.value = effectiveContextTemplate
       titleProxy.value = newCard.title
       await loadSchemaForCard(newCard)
       // 载入每卡片参数
@@ -312,12 +499,16 @@ watch(
         if (eff) editingParams.value = { ...eff }
       } catch {}
       if (!editingParams.value || Object.keys(editingParams.value).length === 0) {
-        const preset = getPresetForType(newCard.card_type?.name) || {}
+        const preset = getPresetForCardType(newCard.card_type?.name) || {}
         editingParams.value = { ...preset }
       }
       if (!editingParams.value.llm_config_id) {
         const first = aiOptions.value?.llm_configs?.[0]
         if (first) editingParams.value.llm_config_id = first.id
+      }
+      const effectivePromptName = getEffectivePromptName(newCard, editingParams.value)
+      if (effectivePromptName) {
+        editingParams.value.prompt_name = effectivePromptName
       }
       // 本地兼容保存
       perCardStore.setForCard(newCard.id, editingParams.value)
@@ -326,91 +517,7 @@ watch(
   { immediate: true, deep: true }
 )
 
-const perCardParams = computed(() => perCardStore.getByCardId(props.card.id))
 const editingParams = ref<PerCardAIParams>({})
-
-const selectedModelName = computed(() => {
-  try {
-    const id = (perCardParams.value || editingParams.value)?.llm_config_id
-    const list = aiOptions.value?.llm_configs || []
-    const found = list.find(m => m.id === id)
-    return found?.display_name || (id != null ? String(id) : '')
-  } catch { return '' }
-})
-
-const paramSummary = computed(() => {
-  const p = perCardParams.value || editingParams.value
-  const model = selectedModelName.value ? `模型:${selectedModelName.value}` : '模型:未设'
-  const prompt = p?.prompt_name ? `提示词:${p.prompt_name}` : '提示词:未设'
-  const t = p?.temperature != null ? `温度:${p.temperature}` : ''
-  const m = p?.max_tokens != null ? `max_tokens:${p.max_tokens}` : ''
-  return [model, prompt, t, m].filter(Boolean).join(' · ')
-})
-
-async function applyAndSavePerCardParams() {
-  try {
-    await updateCardAIParams(props.card.id, { ...editingParams.value })
-    perCardStore.setForCard(props.card.id, { ...editingParams.value })
-    ElMessage.success('已保存')
-  } catch { ElMessage.error('保存失败') }
-}
-
-async function restoreParamsFollowType() {
-  try {
-    await updateCardAIParams(props.card.id, null)
-    ElMessage.success('已恢复跟随类型')
-    const resp = await getCardAIParams(props.card.id)
-    const eff = resp?.effective_params
-    if (eff) editingParams.value = { ...eff }
-  } catch { ElMessage.error('操作失败') }
-}
-
-async function applyParamsToType() {
-  try {
-    // 1) 先把当前编辑值保存到该卡片（作为来源）
-    await updateCardAIParams(props.card.id, { ...editingParams.value })
-    // 2) 应用到类型
-    await applyCardAIParamsToType(props.card.id)
-    // 通知设置页刷新
-    window.dispatchEvent(new Event('card-types-updated'))
-    // 3) 应用到类型后，默认让当前卡片恢复跟随类型，以便参数与顶部显示立即一致
-    await updateCardAIParams(props.card.id, null)
-    const resp = await getCardAIParams(props.card.id)
-    const eff = resp?.effective_params
-    if (eff) {
-      editingParams.value = { ...eff }
-      perCardStore.setForCard(props.card.id, { ...eff })
-    }
-    ElMessage.success('已应用到类型，并恢复本卡片跟随类型')
-  } catch { ElMessage.error('应用失败') }
-}
-
-function resetToPreset() {
-  const preset = getPresetForType(props.card.card_type?.name) || {}
-  if (!preset.llm_config_id) {
-    const first = aiOptions.value?.llm_configs?.[0]
-    if (first) preset.llm_config_id = first.id
-  }
-  editingParams.value = { ...preset }
-  perCardStore.setForCard(props.card.id, editingParams.value)
-}
-
-function getPresetForType(typeName?: string) : PerCardAIParams | undefined {
-  // 兼容旧预设：按照类型名提供简易默认值
-  const map: Record<string, PerCardAIParams> = {
-    '金手指': { prompt_name: '金手指生成', response_model_name: 'SpecialAbilityResponse', temperature: 0.6, max_tokens: 1024, timeout: 60 },
-    '一句话梗概': { prompt_name: '一句话梗概', response_model_name: 'OneSentence', temperature: 0.6, max_tokens: 1024, timeout: 60 },
-    '故事大纲': { prompt_name: '一段话大纲', response_model_name: 'ParagraphOverview', temperature: 0.6, max_tokens: 2048, timeout: 60 },
-    '世界观设定': { prompt_name: '世界观设定', response_model_name: 'WorldBuilding', temperature: 0.6, max_tokens: 8192, timeout: 120 },
-    '核心蓝图': { prompt_name: '核心蓝图', response_model_name: 'Blueprint', temperature: 0.6, max_tokens: 8192, timeout: 120 },
-    '分卷大纲': { prompt_name: '分卷大纲', response_model_name: 'VolumeOutline', temperature: 0.6, max_tokens: 8192, timeout: 120 },
-    '阶段大纲': { prompt_name: '阶段大纲', response_model_name: 'StageLine', temperature: 0.6, max_tokens: 8192, timeout: 120 },
-    '章节大纲': { prompt_name: '章节大纲', response_model_name: 'ChapterOutline', temperature: 0.6, max_tokens: 4096, timeout: 60 },
-    '写作指南': { prompt_name: '写作指南', response_model_name: 'WritingGuide', temperature: 0.7, max_tokens: 8192, timeout: 60 },
-    '章节正文': { prompt_name: '内容生成', temperature: 0.7, max_tokens: 8192, timeout: 60 },
-  }
-  return map[typeName || '']
-}
 
 async function loadSchemaForCard(card: CardRead) {
   schemaIsLoading.value = true
@@ -598,9 +705,10 @@ async function handleSave() {
   // 默认表单编辑器的保存逻辑
   try {
     isSaving.value = true
+    const mergedContent = mergeArchitectureStepSystemFields(localData.value as Record<string, any>)
     const updatePayload: CardUpdate = {
       title: titleProxy.value,
-      content: cloneDeep(localData.value),
+      content: mergedContent,
       ai_context_template: localAiContextTemplate.value,
       needs_confirmation: false,  // 清除 AI 修改标记，触发工作流
     }
@@ -614,7 +722,8 @@ async function handleSave() {
         ai_context_template: localAiContextTemplate.value,
       })
     } catch {}
-    originalData.value = cloneDeep(localData.value)
+    originalData.value = cloneDeep(mergedContent)
+    localData.value = cloneDeep(mergedContent)
     originalAiContextTemplate.value = localAiContextTemplate.value
     lastSavedAt.value = new Date().toLocaleTimeString()
     ElMessage.success('保存成功！')
@@ -665,8 +774,9 @@ async function handleStartGeneration(userPrompt: string, useExistingContent: boo
     // 2. 解析上下文
     const editingContent = wrapperName.value ? innerData.value : localData.value
     const currentCardForResolve = { ...props.card, content: editingContent }
+    const effectiveTemplate = getResolvedContextTemplateValue()
     const resolvedContext = resolveTemplate({
-      template: localAiContextTemplate.value,
+      template: effectiveTemplate,
       cards: cards.value,
       currentCard: currentCardForResolve as any
     })
@@ -674,6 +784,11 @@ async function handleStartGeneration(userPrompt: string, useExistingContent: boo
     // 3. 初始化指令执行器（根据选项决定是否使用现有内容）
     const initialData = useExistingContent ? (editingContent || {}) : {}
     instructionExecutor.value = new InstructionExecutor(initialData)
+    const architectureStepData = buildArchitectureStepGenerationData(props.card, cards.value)
+    const requestCurrentData = {
+      ...(useExistingContent ? (instructionExecutor.value?.getData() || {}) : {}),
+      ...architectureStepData
+    }
 
     // 4. 重置对话历史
     conversationHistory.value = []
@@ -703,7 +818,7 @@ async function handleStartGeneration(userPrompt: string, useExistingContent: boo
     }
 
     // 8. 调用生成 API
-    await performGeneration(userPrompt, effective, resolvedContext, p, useExistingContent)
+    await performGeneration(userPrompt, getGenerationSchema(props.card, effective), resolvedContext, p, requestCurrentData)
   } catch (e) {
     console.error('启动生成失败:', e)
     ElMessage.error('启动生成失败')
@@ -718,7 +833,7 @@ async function performGeneration(
   schema: any,
   contextInfo: string,
   params: PerCardAIParams,
-  useExistingContent: boolean
+  currentData: Record<string, any>
 ) {
   // 创建 AbortController
   currentAbortController.value = new AbortController()
@@ -729,11 +844,10 @@ async function performGeneration(
         llm_config_id: params.llm_config_id!,
         user_prompt: userPrompt,
         response_model_schema: schema,
-        // 根据选项决定是否传递现有内容
-        current_data: useExistingContent ? (instructionExecutor.value?.getData() || {}) : {},
+        current_data: currentData,
         conversation_context: conversationHistory.value,
         context_info: contextInfo,
-        prompt_template: params.prompt_name,
+        prompt_template: getEffectivePromptName(props.card, params),
         temperature: params.temperature,
         max_tokens: params.max_tokens,
         timeout: params.timeout
@@ -879,14 +993,20 @@ async function handleContinueGeneration(userMessage: string) {
 
     const editingContent = wrapperName.value ? innerData.value : localData.value
     const currentCardForResolve = { ...props.card, content: editingContent }
+    const effectiveTemplate = getResolvedContextTemplateValue()
     const resolvedContext = resolveTemplate({
-      template: localAiContextTemplate.value,
+      template: effectiveTemplate,
       cards: cards.value,
       currentCard: currentCardForResolve as any
     })
 
     // 继续生成（总是基于现有内容）
-    await performGeneration(userMessage, effective, resolvedContext, p, true)
+    const architectureStepData = buildArchitectureStepGenerationData(props.card, cards.value)
+    const requestCurrentData = {
+      ...(instructionExecutor.value?.getData() || {}),
+      ...architectureStepData
+    }
+    await performGeneration(userMessage, getGenerationSchema(props.card, effective), resolvedContext, p, requestCurrentData)
   } catch (e) {
     console.error('继续生成失败:', e)
     ElMessage.error('继续生成失败')
@@ -923,15 +1043,17 @@ async function handleGenerate() {
   if (!p?.llm_config_id) { ElMessage.error('请先设置有效的模型ID'); return }
   const editingContent = wrapperName.value ? innerData.value : localData.value
   const currentCardForResolve = { ...props.card, content: editingContent }
-  const resolvedContext = resolveTemplate({ template: localAiContextTemplate.value, cards: cards.value, currentCard: currentCardForResolve as any })
+  const effectiveTemplate = getResolvedContextTemplateValue()
+  const resolvedContext = resolveTemplate({ template: effectiveTemplate, cards: cards.value, currentCard: currentCardForResolve as any })
   try {
     // 直接读取有效 Schema 并作为 response_model_schema 发送
     const { getCardSchema } = await import('@renderer/api/setting')
     const resp = await getCardSchema(props.card.id)
     const effective = resp?.effective_schema || resp?.json_schema
     if (!effective) { ElMessage.error('未找到此卡片的结构（Schema）。'); return }
+    const generationSchema = getGenerationSchema(props.card, effective)
     const sampling = { temperature: p.temperature, max_tokens: p.max_tokens, timeout: p.timeout }
-    const result = await aiStore.generateContentWithSchema(effective as any, resolvedContext, p.llm_config_id!, p.prompt_name ?? undefined, sampling)
+    const result = await aiStore.generateContentWithSchema(generationSchema as any, resolvedContext, p.llm_config_id!, getEffectivePromptName(props.card, p), sampling)
     if (result) {
       const { mergeWith, isArray } = await import('lodash-es')
       const arrayOverwrite = (objValue: any, srcValue: any) => {
@@ -1002,15 +1124,17 @@ async function handleAssistantFinalize(summary: string) {
     // 将对话要点与上下文合并，作为输入文本（不再附加卡片提示词模板）
     const editingContent = wrapperName.value ? innerData.value : localData.value
     const currentCardForResolve = { ...props.card, content: editingContent }
-    const resolvedContextText = resolveTemplate({ template: localAiContextTemplate.value, cards: cards.value, currentCard: currentCardForResolve as any })
+    const effectiveTemplate = getResolvedContextTemplateValue()
+    const resolvedContextText = resolveTemplate({ template: effectiveTemplate, cards: cards.value, currentCard: currentCardForResolve as any })
     const inputText = `${resolvedContextText}\n\n[对话要点]\n${summary}`
     // 读取有效 Schema
     const { getCardSchema } = await import('@renderer/api/setting')
     const resp = await getCardSchema(props.card.id)
     const effective = resp?.effective_schema || resp?.json_schema
     if (!effective) { ElMessage.error('未找到此卡片的结构（Schema）。'); return }
+    const generationSchema = getGenerationSchema(props.card, effective)
     const sampling = { temperature: p.temperature, max_tokens: p.max_tokens, timeout: p.timeout }
-    const result = await aiStore.generateContentWithSchema(effective as any, inputText, p.llm_config_id!, p.prompt_name ?? undefined, sampling)
+    const result = await aiStore.generateContentWithSchema(generationSchema as any, inputText, p.llm_config_id!, getEffectivePromptName(props.card, p), sampling)
     if (result) {
       const { mergeWith, isArray } = await import('lodash-es')
       const arrayOverwrite = (objValue: any, srcValue: any) => {

@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, shallowRef } from 'vue'
 import { getProjects, type ProjectRead } from '@renderer/api/projects'
 import { getCardsForProject, type CardRead } from '@renderer/api/cards'
+import { getSystemCardDisplayTitle } from '@renderer/utils/systemCardTitle'
 
 export type InjectRef = { projectId: number; projectName: string; cardId: number; cardTitle: string; content: any; source?: 'auto' | 'manual' }
 export type AssistantMessage = { role: 'user' | 'assistant'; content: string; ts?: number }
@@ -286,7 +287,7 @@ export const useAssistantStore = defineStore('assistant', () => {
       const isCurrent = currentCardId && card.id === currentCardId
       const marker = isCurrent ? ' ⭐当前' : ''
       
-      lines.push(`${indent}[${typeName}] ${card.title} {id:${card.id} | 更新:${updatedDate}${marker}}`)
+      lines.push(`${indent}[${typeName}] ${getSystemCardDisplayTitle(card.title)} {id:${card.id} | 更新:${updatedDate}${marker}}`)
       
       // 递归处理子卡片
       const childText = buildCardTreeText(cards, card.id, depth + 1, currentCardId)

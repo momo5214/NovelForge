@@ -9,8 +9,8 @@
         <ModelDrivenForm
           :schema="schema"
           v-model="proxy"
-          :include-fields="sec.include"
-          :exclude-fields="sec.exclude"
+          :include-fields="resolveIncludeFields(sec.include)"
+          :exclude-fields="resolveExcludeFields(sec.exclude)"
         />
       </el-collapse-item>
     </el-collapse>
@@ -23,7 +23,13 @@ import type { JSONSchema } from '@renderer/api/schema'
 import ModelDrivenForm from './ModelDrivenForm.vue'
 import type { SectionConfig } from '@renderer/services/uiLayoutService'
 
-const props = defineProps<{ schema: JSONSchema | undefined; modelValue: any; sections: SectionConfig[] }>()
+const props = defineProps<{
+  schema: JSONSchema | undefined
+  modelValue: any
+  sections: SectionConfig[]
+  includeFields?: string[]
+  excludeFields?: string[]
+}>()
 const emit = defineEmits(['update:modelValue'])
 
 const proxy = ref<any>(props.modelValue)
@@ -31,6 +37,20 @@ watch(() => props.modelValue, v => proxy.value = v, { deep: true })
 watch(proxy, v => emit('update:modelValue', v), { deep: true })
 
 const activeNames = ref<string[]>([])
+
+function resolveIncludeFields(sectionInclude?: string[]) {
+  if (props.includeFields && props.includeFields.length > 0) {
+    return sectionInclude && sectionInclude.length > 0
+      ? sectionInclude.filter(field => props.includeFields!.includes(field))
+      : props.includeFields
+  }
+  return sectionInclude
+}
+
+function resolveExcludeFields(sectionExclude?: string[]) {
+  const merged = new Set<string>([...(sectionExclude || []), ...(props.excludeFields || [])])
+  return Array.from(merged)
+}
 
 // 在首次接收 sections 时，初始化展开状态；后续更新时尽量保留当前展开项
 let initialized = false

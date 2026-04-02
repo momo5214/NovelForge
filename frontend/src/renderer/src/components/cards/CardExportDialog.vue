@@ -14,7 +14,7 @@
           <el-option
             v-for="card in cards"
             :key="card.id"
-            :label="`${card.title}（${card.card_type.name}）`"
+            :label="`${getSystemCardDisplayTitle(card.title)}（${getCardTypeDisplayName(card.card_type.name)}）`"
             :value="card.id!"
           />
         </el-select>
@@ -25,7 +25,7 @@
           <el-option
             v-for="type in cardTypes"
             :key="type.id"
-            :label="type.name"
+            :label="getCardTypeDisplayName(type.name)"
             :value="type.id!"
           />
         </el-select>
@@ -56,6 +56,8 @@ import { computed, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { exportCardsForProject, type CardExportFormat, type CardExportScope } from '@renderer/api/cards'
 import type { components } from '@renderer/types/generated'
+import { getCardTypeDisplayName } from '@renderer/utils/cardTypeDisplay'
+import { getSystemCardDisplayTitle } from '@renderer/utils/systemCardTitle'
 
 type CardRead = components['schemas']['CardRead']
 type CardTypeRead = components['schemas']['CardTypeRead']

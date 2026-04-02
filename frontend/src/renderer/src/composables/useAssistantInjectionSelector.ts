@@ -1,5 +1,6 @@
 import { computed, ref, type Ref } from 'vue'
 import type { CardRead } from '@renderer/api/cards'
+import { getSystemCardDisplayTitle } from '@renderer/utils/systemCardTitle'
 
 interface AssistantProjectLite {
   id: number
@@ -29,7 +30,11 @@ export function useAssistantInjectionSelector(options: UseAssistantInjectionSele
   const filteredSelectorCards = computed(() => {
     const query = (selectorSearch.value || '').trim().toLowerCase()
     if (!query) return selectorCards.value
-    return (selectorCards.value || []).filter(card => (card.title || '').toLowerCase().includes(query))
+    return (selectorCards.value || []).filter(card => {
+      const rawTitle = String(card.title || '').toLowerCase()
+      const displayTitle = getSystemCardDisplayTitle(card.title || '').toLowerCase()
+      return rawTitle.includes(query) || displayTitle.includes(query)
+    })
   })
 
   const selectorTreeData = computed(() => {
@@ -42,7 +47,7 @@ export function useAssistantInjectionSelector(options: UseAssistantInjectionSele
       cardsByType[typeName].push({
         id: card.id,
         title: card.title,
-        label: card.title,
+        label: getSystemCardDisplayTitle(card.title),
         key: `card:${card.id}`,
         isLeaf: true,
       })

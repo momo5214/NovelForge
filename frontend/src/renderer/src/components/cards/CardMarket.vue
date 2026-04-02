@@ -8,7 +8,7 @@
             <template #header>
               <div class="card-header">
                 <div class="header-left">
-                  <el-tag size="small" effect="plain">{{ card.card_type.name }}</el-tag>
+                  <el-tag size="small" effect="plain">{{ getCardTypeDisplayName(card.card_type.name) }}</el-tag>
                   <span class="title">{{ card.title }}</span>
                 </div>
                 <div class="header-right">
@@ -41,7 +41,7 @@
           <el-table-column prop="title" label="标题" />
           <el-table-column label="类型" width="140">
             <template #default="{ row }">
-              <el-tag size="small">{{ row.card_type.name }}</el-tag>
+              <el-tag size="small">{{ getCardTypeDisplayName(row.card_type.name) }}</el-tag>
             </template>
           </el-table-column>
           <el-table-column label="创建时间" width="200">
@@ -68,6 +68,7 @@ import { computed, ref } from 'vue'
 import { useCardStore } from '@renderer/stores/useCardStore'
 import { storeToRefs } from 'pinia'
 import CardFilterBar from './CardFilterBar.vue'
+import { getCardTypeDisplayName } from '@renderer/utils/cardTypeDisplay'
 
 const emit = defineEmits<{ (e: 'edit-card', id: number): void }>()
 

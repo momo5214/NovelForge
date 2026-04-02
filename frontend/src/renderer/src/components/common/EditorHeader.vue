@@ -16,7 +16,7 @@
         <el-tooltip content="打开上下文抽屉（Alt+K）">
           <el-button type="primary" plain @click="$emit('open-context')">上下文注入</el-button>
         </el-tooltip>
-        <el-button v-if="!isChapterContent" type="success" plain @click="$emit('generate')">AI 生成</el-button>
+        <el-button v-if="canGenerateComputed" type="success" plain @click="$emit('generate')">AI 生成</el-button>
         <el-button 
           :type="canSaveComputed ? 'primary' : 'info'" 
           :disabled="!canSaveComputed" 
@@ -51,8 +51,8 @@ const props = defineProps<{
   saving: boolean
   lastSavedAt?: string
   canSave?: boolean
-  isChapterContent?: boolean
   needsConfirmation?: boolean  // AI 修改需要确认
+  canGenerate?: boolean
 }>()
 
 // 计算是否可以保存：如果需要确认，即使没有修改也可以保存
@@ -60,6 +60,8 @@ const canSaveComputed = computed(() => {
   if (props.needsConfirmation) return !props.saving
   return props.canSave
 })
+
+const canGenerateComputed = computed(() => !!props.canGenerate)
 
 const emit = defineEmits(['update:title','save','generate','open-versions','delete','open-context'])
 

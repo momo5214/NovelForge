@@ -156,14 +156,24 @@ export async function runCodeWorkflowStream(
   workflowId: number,
   callbacks: WorkflowStreamCallbacks,
   resume: boolean = false,
-  runId?: number
+  runId?: number,
+  params?: Record<string, any>
 ): Promise<{ runId: { value: number }; eventSource: EventSource }> {
   console.log('[API] 开始执行工作流:', workflowId, 'resume:', resume, 'runId:', runId)
   
   // 构建 URL
-  let url = `${API_BASE_URL}/workflows/${workflowId}/execute-stream`
+  const searchParams = new URLSearchParams()
   if (resume && runId) {
-    url += `?resume=true&run_id=${runId}`
+    searchParams.set('resume', 'true')
+    searchParams.set('run_id', String(runId))
+  }
+  if (params && Object.keys(params).length > 0) {
+    searchParams.set('params_json', JSON.stringify(params))
+  }
+  let url = `${API_BASE_URL}/workflows/${workflowId}/execute-stream`
+  const queryString = searchParams.toString()
+  if (queryString) {
+    url += `?${queryString}`
   }
   
   console.log('[API] 连接 SSE:', url)
@@ -172,9 +182,11 @@ export async function runCodeWorkflowStream(
   const eventSource = new EventSource(url)
   // 使用对象包装 runId，使其可以被外部引用更新
   const runIdRef = { value: runId || 0 }
+  let opened = false
 
   eventSource.onopen = () => {
     console.log('[API] SSE 连接成功')
+    opened = true
   }
 
   eventSource.onmessage = (event) => {
@@ -231,7 +243,7 @@ export async function runCodeWorkflowStream(
     console.error('[API] SSE 错误:', error)
     
     // 检查 readyState 判断是否是正常关闭
-    if (eventSource.readyState === EventSource.CLOSED) {
+    if (eventSource.readyState === EventSource.CLOSED && opened) {
       console.log('[API] SSE 连接已关闭（可能是暂停或完成）')
       // 不调用 onError，避免误报错误
       return
@@ -287,6 +299,7 @@ export async function getCodeWorkflow(id: number): Promise<{ id: number; name: s
 export interface ProjectTemplate {
   workflow_id: number
   workflow_name: string
+  display_name?: string
   template: string | null
   description?: string
 }

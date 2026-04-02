@@ -606,7 +606,11 @@ function resolveToken(rawToken: string, ctx: ResolveContext, vars: ResolveVars):
       }
     }
 
-    if (!selected) selected = candidates[0]
+    if (!selected) {
+      // 显式筛选（如 index=...）未命中时，必须返回空，避免错误回退到第一张卡
+      if (filter) return ''
+      selected = candidates[0]
+    }
 
     if (!rawPath) {
       const value = getPathValue(selected, 'content')

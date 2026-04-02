@@ -19,7 +19,12 @@
 					</el-form-item>
 					<el-form-item label="提示词">
 						<el-select v-model="editing.prompt_name" placeholder="选择提示词" filterable style="width: 240px;" :teleported="false">
-							<el-option v-for="p in (aiOptions?.prompts || [])" :key="p.id" :label="p.name" :value="p.name" />
+							<el-option
+								v-for="p in (aiOptions?.prompts || [])"
+								:key="p.id"
+								:label="getPromptOptionLabel(p)"
+								:value="p.name"
+							/>
 						</el-select>
 					</el-form-item>
 					<el-form-item label="温度">
@@ -52,7 +57,7 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
 import { Setting } from '@element-plus/icons-vue'
-import { usePerCardAISettingsStore, type PerCardAIParams } from '@renderer/stores/usePerCardAISettingsStore'
+import { usePerCardAISettingsStore, type PerCardAIParams, getPresetForCardType } from '@renderer/stores/usePerCardAISettingsStore'
 import { getAIConfigOptions, type AIConfigOptions } from '@renderer/api/ai'
 import { getCardAIParams, updateCardAIParams, applyCardAIParamsToType } from '@renderer/api/setting'
 import { ElMessage } from 'element-plus'
@@ -63,6 +68,61 @@ const store = usePerCardAISettingsStore()
 const visible = ref(false)
 const aiOptions = ref<AIConfigOptions | null>(null)
 const editing = ref<PerCardAIParams>({})
+
+const PROMPT_DISPLAY_MAP: Record<string, { name: string; description: string }> = {
+	'ANG.M0.architecture_step1_mission': {
+		name: 'M0 架构步骤1：分卷使命宣言',
+		description: '为整部作品定义分卷战略目标与卷级使命。',
+	},
+	'ANG.M0.architecture_step2_worldview': {
+		name: 'M0 架构步骤2：世界观与冲突发生器',
+		description: '构建世界规则并生成推动剧情的核心冲突。',
+	},
+	'ANG.M0.architecture_step3_plot': {
+		name: 'M0 架构步骤3：情节线与推进机制',
+		description: '设计主线/支线与关键推进节点。',
+	},
+	'ANG.M0.architecture_step4_character': {
+		name: '步骤四：核心角色规划',
+		description: '生成服务后续角色建卡的角色规划稿。',
+	},
+	'ANG.M0.architecture_step5_style': {
+		name: 'M0 架构步骤5：叙事风格与文本策略',
+		description: '确定叙事口吻、节奏与语言风格约束。',
+	},
+	'ANG.M0.volume_design_format': {
+		name: 'M0 分卷格式模板',
+		description: '分卷输出的标准结构模板。',
+	},
+	'ANG.M0.volume_outline': {
+		name: 'M0 首卷分卷大纲',
+		description: '生成首卷的卷级剧情与章节级推进方案。',
+	},
+	'ANG.M0.subsequent_volume': {
+		name: 'M0 中间卷分卷大纲',
+		description: '生成中间卷递进结构与承接关系。',
+	},
+	'ANG.M0.final_volume': {
+		name: 'M0 终卷收束大纲',
+		description: '生成终卷收束路径与主线回收方案。',
+	},
+	'ANG.M0.chapter_blueprint': {
+		name: 'M0 章节目录蓝图',
+		description: '将卷级结构拆解为章节目录与每章目标。',
+	},
+	'ANG.M0.chapter_draft': {
+		name: 'M0 章节正文草稿',
+		description: '根据章节蓝图生成正文草稿。',
+	},
+}
+
+function getPromptOptionLabel(prompt: { name: string; description?: string | null }): string {
+	const mapped = PROMPT_DISPLAY_MAP[prompt.name]
+	if (mapped?.name) return mapped.name
+	const desc = (prompt.description || '').trim()
+	if (desc) return desc
+	return prompt.name
+}
 
 async function loadOptions() { try { aiOptions.value = await getAIConfigOptions() } catch {} }
 
@@ -95,7 +155,7 @@ watch(() => props.cardId, async (id) => {
 		const sv = saved.value as any
 		editing.value = { ...sv, llm_config_id: sv?.llm_config_id == null ? sv?.llm_config_id : Number(sv.llm_config_id) }
 	} else {
-		const preset = getPresetForType(props.cardTypeName)
+		const preset = getPresetForCardType(props.cardTypeName)
 		if (!preset.llm_config_id) {
 			const first = aiOptions.value?.llm_configs?.[0]; if (first) preset.llm_config_id = Number(first.id)
 		}
@@ -103,21 +163,6 @@ watch(() => props.cardId, async (id) => {
 		store.setForCard(id, editing.value)
 	}
 }, { immediate: true })
-
-function getPresetForType(typeName?: string): PerCardAIParams {
-	const map: Record<string, PerCardAIParams> = {
-		'金手指': { prompt_name: '金手指生成', temperature: 0.6, max_tokens: 1024, timeout: 60 },
-		'一句话梗概': { prompt_name: '一句话梗概', temperature: 0.6, max_tokens: 1024, timeout: 60 },
-		'世界观设定': { prompt_name: '世界观设定', temperature: 0.6, max_tokens: 8192, timeout: 120 },
-		'核心蓝图': { prompt_name: '核心蓝图', temperature: 0.6, max_tokens: 8192, timeout: 120 },
-		'分卷大纲': { prompt_name: '分卷大纲', temperature: 0.6, max_tokens: 8192, timeout: 120 },
-		'阶段大纲': { prompt_name: '阶段大纲', temperature: 0.6, max_tokens: 8192, timeout: 120 },
-		'章节大纲': { prompt_name: '章节大纲', temperature: 0.6, max_tokens: 4096, timeout: 60 },
-		'写作指南': { prompt_name: '写作指南', temperature: 0.7, max_tokens: 8192, timeout: 60 },
-		'章节正文': { prompt_name: '内容生成', temperature: 0.7, max_tokens: 8192, timeout: 60 },
-	}
-	return map[typeName || ''] || {}
-}
 
 function saveLocal() {
 	try {
@@ -133,7 +178,7 @@ function saveLocal() {
 	} catch { ElMessage.error('保存失败') }
 }
 function resetToPreset() {
-	const preset = getPresetForType(props.cardTypeName)
+	const preset = getPresetForCardType(props.cardTypeName)
 	editing.value = { ...preset, llm_config_id: preset.llm_config_id == null ? preset.llm_config_id : Number(preset.llm_config_id) }
 	store.setForCard(props.cardId, editing.value)
 }

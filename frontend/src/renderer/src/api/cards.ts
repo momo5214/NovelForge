@@ -42,6 +42,14 @@ export const batchReorderCards = (data: CardBatchReorderRequest): Promise<CardBa
 
 export const deleteCard = (id: number): Promise<void> => request.delete(`/cards/${id}`)
 export const copyCard = (id: number, params: { target_project_id: number; parent_id?: number | null }): Promise<CardRead> => request.post(`/cards/${id}/copy`, params)
+export const confirmCandidateCharacters = (id: number): Promise<{
+  success: boolean
+  assigned_code_count: number
+  updated_card_count: number
+  created_card_count: number
+  chapter_card_id: number
+  confirmed_names: string[]
+}> => request.post(`/cards/${id}/candidate-characters/confirm`)
 export const moveCard = (id: number, params: { target_project_id: number; parent_id?: number | null }): Promise<CardRead> => request.post(`/cards/${id}/move`, params)
 
 // --- AI Content Models API ---
