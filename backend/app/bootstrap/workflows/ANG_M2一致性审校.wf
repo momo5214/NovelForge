@@ -1,0 +1,170 @@
+# 工作流：ANG_M2一致性审校
+# 功能：对 ANG.M0 章节草稿执行一致性审校，生成审校报告卡
+# 触发器：无（手动执行）
+
+#@node(description="选择项目")
+project = Logic.SelectProject(project_id=1, project_name=None)
+#</node>
+
+
+#@node(description="选择模型")
+llm = Logic.SelectLLM(llm_config_id=1, llm_name=None)
+#</node>
+
+
+#@node(description="查询写作指南")
+writing_guide_cards = Card.Query(
+    project_id=project.project_id,
+    card_type="写作指南",
+    limit=5
+  )
+#</node>
+
+
+#@node(description="查询作品标签")
+tags_cards = Card.Query(
+    project_id=project.project_id,
+    card_type="作品标签",
+    limit=5
+  )
+#</node>
+
+
+#@node(description="查询章节正文卡")
+chapter_cards = Card.Query(
+    project_id=project.project_id,
+    card_type="章节正文",
+    limit=2000
+  )
+#</node>
+
+
+#@node(description="查询章节大纲卡")
+chapter_outline_cards = Card.Query(
+    project_id=project.project_id,
+    card_type="章节大纲",
+    limit=2000
+  )
+#</node>
+
+
+#@node(description="查询分卷大纲卡")
+volume_cards = Card.Query(
+    project_id=project.project_id,
+    card_type="分卷大纲",
+    limit=200
+  )
+#</node>
+
+
+#@node(description="查询一致性审校报告")
+review_cards = Card.Query(
+    project_id=project.project_id,
+    card_type="通用文本",
+    limit=2000
+  )
+#</node>
+
+
+#@node(description="确定待审校章节")
+target = Logic.Expression(
+    expression="([pair[1] for pair in sorted([(int(((c.get('content') or {}).get('chapter_number') or 10**9)), c) for c in chapter_cards.cards]) if str(((pair[1].get('content') or {}).get('content') or '')).strip() and not any([(((r.get('title') or '').startswith('ANG.M2/一致性审校报告-第' + str(int(((pair[1].get('content') or {}).get('chapter_number') or 0))) + '章')) or (((r.get('title') or '').startswith('一致性审校-第' + str(int(((pair[1].get('content') or {}).get('chapter_number') or 0))) + '章')))) for r in review_cards.cards])] + [None])[0]"
+  )
+#</node>
+
+
+#@node(description="断言存在待审校章节")
+target_assert = Logic.Assert(
+    condition="target.result is not None",
+    message="未找到待审校的章节正文卡"
+  )
+#</node>
+
+
+#@node(description="读取上一章独立剧情要点")
+previous_plot_points = Logic.Expression(
+    expression="str((([str((c.get('content') or {}).get('content') or '').strip() for c in review_cards.cards if (((c.get('title') or '').startswith('剧情要点-第' + str(int((target.result.get('content') or {}).get('chapter_number') or 0) - 1) + '章')) or ((c.get('title') or '').startswith('ANG.M1/剧情要点-第' + str(int((target.result.get('content') or {}).get('chapter_number') or 0) - 1) + '章'))) and str((c.get('content') or {}).get('content') or '').strip()] + [''])[0]))"
+  )
+#</node>
+
+
+#@node(description="构建审校上下文")
+review_context = Logic.Expression(
+    expression="{'chapter_number': int((target.result.get('content') or {}).get('chapter_number') or 0), 'chapter_title': str((target.result.get('content') or {}).get('title') or target.result.get('title') or ''), 'volume_number': int((target.result.get('content') or {}).get('volume_number') or 1), 'chapter_text': str((target.result.get('content') or {}).get('content') or ''), 'chapter_blueprint': str((([c.get('content', {}).get('overview') for c in chapter_outline_cards.cards if int(((c.get('content') or {}).get('chapter_number') or 0)) == int((target.result.get('content') or {}).get('chapter_number') or 0)] + [''])[0])), 'next_chapter_blueprint': str((([c.get('content', {}).get('overview') for c in chapter_outline_cards.cards if int(((c.get('content') or {}).get('chapter_number') or 0)) == int((target.result.get('content') or {}).get('chapter_number') or 0) + 1] + [''])[0])), 'volume_outline': str((([c.get('content', {}).get('overview') for c in volume_cards.cards if int((c.get('content') or {}).get('volume_number') or -1) == int((target.result.get('content') or {}).get('volume_number') or 1)] + [''])[0])), 'global_summary': str((([str((c.get('content') or {}).get('content') or '').strip() for c in review_cards.cards if (c.get('title') or '') == '前情摘要' and str((c.get('content') or {}).get('content') or '').strip()] + [''])[0])), 'previous_plot_points': str(previous_plot_points.result or ''), 'foreshadow_ledger': str((([str((c.get('content') or {}).get('content') or '').strip() for c in review_cards.cards if (((c.get('title') or '').startswith('伏笔管理/未回收台账')) or ((c.get('title') or '').startswith('ANG.M2/伏笔台账-未回收'))) and str((c.get('content') or {}).get('content') or '').strip()] + [''])[0]))}"
+  )
+#</node>
+
+
+#@node(description="清洗章节标题")
+chapter_title_clean = Logic.Expression(
+    expression="(str(review_context.result.chapter_title or '').strip().replace('第' + str(int(review_context.result.chapter_number)) + '章', '', 1).strip() if str(review_context.result.chapter_title or '').strip().startswith('第' + str(int(review_context.result.chapter_number)) + '章') else str(review_context.result.chapter_title or '').strip()) or '未命名章节'"
+  )
+#</node>
+
+
+#@node(description="标准化章节标题")
+chapter_title_meta = Logic.Expression(
+    expression="{'title': str(chapter_title_clean.result or '未命名章节')}"
+  )
+#</node>
+
+
+#@node(description="构建一致性审校变量")
+review_vars = Logic.Expression(
+    expression="{'novel_number': int(review_context.result.chapter_number), 'word_number': int(coalesce(((tags_cards.cards[0].content if tags_cards.cards else {}) or {}).get('word_number'), ((tags_cards.cards[0].content if tags_cards.cards else {}) or {}).get('chapter_word_count'), 3000)), 'genre': str(coalesce(((tags_cards.cards[0].content if tags_cards.cards else {}) or {}).get('genre'), ((tags_cards.cards[0].content if tags_cards.cards else {}) or {}).get('theme'), '玄幻')), 'chapter_title': chapter_title_meta.result.title, 'chapter_word_count': len(review_context.result.chapter_text), 'user_guidance': str((([str((c.get('content') or {}).get('content') or '').strip() for c in writing_guide_cards.cards if int(((c.get('content') or {}).get('volume_number') or 0)) == int(review_context.result.volume_number) and str((c.get('content') or {}).get('content') or '').strip()] + [str((writing_guide_cards.cards[0].get('content') or {}).get('content') or '').strip() if writing_guide_cards.cards else ''])[0])), 'current_chapter_blueprint': review_context.result.chapter_blueprint, 'next_chapter_blueprint': review_context.result.next_chapter_blueprint, 'volume_outline': review_context.result.volume_outline, 'global_summary': review_context.result.global_summary, 'plot_points': review_context.result.previous_plot_points, 'knowledge_context': review_context.result.foreshadow_ledger, 'Review_text': review_context.result.chapter_text, 'plot_twist_level': '2', 'word_count_min': max(1000, int(coalesce(((tags_cards.cards[0].content if tags_cards.cards else {}) or {}).get('word_number'), ((tags_cards.cards[0].content if tags_cards.cards else {}) or {}).get('chapter_word_count'), 3000)) - 600), 'word_count_max': int(coalesce(((tags_cards.cards[0].content if tags_cards.cards else {}) or {}).get('word_number'), ((tags_cards.cards[0].content if tags_cards.cards else {}) or {}).get('chapter_word_count'), 3000)) + 600}"
+  )
+#</node>
+
+
+#@node(description="加载提示词：一致性审校")
+review_prompt = Prompt.Load(
+    prompt_id="增强一致性审校",
+    variables={
+      "novel_number": "$review_vars.result.novel_number",
+      "chapter_title": "$review_vars.result.chapter_title",
+      "word_number": "$review_vars.result.word_number",
+      "genre": "$review_vars.result.genre",
+      "chapter_word_count": "$review_vars.result.chapter_word_count",
+      "user_guidance": "$review_vars.result.user_guidance",
+      "current_chapter_blueprint": "$review_vars.result.current_chapter_blueprint",
+      "next_chapter_blueprint": "$review_vars.result.next_chapter_blueprint",
+      "volume_outline": "$review_vars.result.volume_outline",
+      "global_summary": "$review_vars.result.global_summary",
+      "plot_points": "$review_vars.result.plot_points",
+      "knowledge_context": "$review_vars.result.knowledge_context",
+      "Review_text": "$review_vars.result.Review_text",
+      "plot_twist_level": "$review_vars.result.plot_twist_level",
+      "word_count_min": "$review_vars.result.word_count_min",
+      "word_count_max": "$review_vars.result.word_count_max"
+    }
+  )
+#</node>
+
+
+#@node(description="执行一致性审校")
+review_ai = AI.LLM(
+    llm_config_id=llm.llm_config_id,
+    user_prompt=review_prompt.text,
+    temperature=0.35,
+    max_tokens=8192,
+    timeout=180,
+    max_retry=3
+  )
+#</node>
+
+
+#@node(description="生成审校报告标题")
+review_title = Logic.Expression(
+    expression="'一致性审校-第' + str(int(review_vars.result.novel_number)) + '章-' + str(review_vars.result.chapter_title)"
+  )
+#</node>
+
+
+#@node(description="保存一致性审校报告")
+review_card = Card.Create(
+    project_id=project.project_id,
+    card_type="通用文本",
+    title="$review_title.result",
+    content={"content": review_ai.response}
+  )
+#</node>

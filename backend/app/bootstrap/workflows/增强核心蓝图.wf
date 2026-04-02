@@ -1,0 +1,83 @@
+# 工作流：增强核心蓝图
+# 功能：增强核心蓝图保存时，批量创建增强分卷大纲，并将长期场景沉淀为全局资产
+# 触发器：增强核心蓝图卡片保存时自动触发
+
+#@node(description="触发器：监听增强核心蓝图卡片保存")
+trigger = Trigger.CardSaved(card_type="增强核心蓝图")
+#</node>
+
+
+#@node(description="读取增强核心蓝图")
+blueprint = Card.Read(card_id=trigger.card_id)
+#</node>
+
+
+#@node(description="确保世界与资产容器卡存在")
+asset_hub = Card.BatchUpsert(
+    project_id=trigger.project_id,
+    card_type="通用文本",
+    title_template="世界与资产",
+    match_by="title",
+    items=[{"title": "世界与资产"}],
+    content_template={"content": ""}
+  )
+#</node>
+
+
+#@node(description="生成分卷列表（使用表达式节点）")
+volumes = Logic.Expression(
+    expression="[{'index': i, 'prompt_name': ('增强分卷大纲-首卷' if i == 1 else ('增强分卷大纲-终卷' if i == (blueprint.content.volume_count or 0) else '增强分卷大纲-续卷'))} for i in range(1, (blueprint.content.volume_count or 0) + 1)]"
+  )
+#</node>
+
+
+#@node(async=true, description="批量创建增强分卷大纲（异步）")
+vol_cards = Card.BatchUpsert(
+    project_id=trigger.project_id,
+    card_type="增强分卷大纲",
+    title_template="第{item.index}卷",
+    content_template={"volume_number": "{item.index}", "prompt_name": "{item.prompt_name}"},
+    match_by="title",
+    items=volumes.result
+  )
+#</node>
+
+#@node(description="提取场景列表")
+scenes = Logic.Expression(
+    expression="blueprint.content.scene_cards or []"
+  )
+#</node>
+
+
+#@node(async=true, description="批量创建场景卡（异步）")
+scene_cards = Card.BatchUpsert(
+    project_id=trigger.project_id,
+    parent_id=asset_hub.cards[0].get('id'),
+    card_type="场景卡",
+    title_template="{item.name}",
+    match_by="title",
+    items=scenes.result,
+    content_template={
+      "name": "{item.name}",
+      "entity_type": "{item.entity_type}",
+      "life_span": "{item.life_span}",
+      "description": "{item.description}",
+      "function_in_story": "{item.function_in_story}"
+    }
+  )
+#</node>
+
+
+#@node(description="等待所有异步任务完成")
+wait_result = Logic.Wait(tasks=[vol_cards, scene_cards])
+#</node>
+
+
+#@node(description="清空来源列表")
+update_result = Card.Update(
+    card_id=trigger.card_id,
+    content_merge={
+      "scene_cards": []
+    }
+  )
+#</node>

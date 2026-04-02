@@ -21,12 +21,15 @@ def _parse_code_workflow(file_path: str) -> dict:
     # 工作流名称统一以文件名为准，避免文件头注释导致初始化名称漂移
     name = os.path.splitext(os.path.basename(file_path))[0]
     description = f"内置工作流: {name}"
+    keep_run_history = name in {
+        "增强章节后处理闭环",
+    }
     
     return {
         "name": name,
         "description": description,
         "code": code,
-        "keep_run_history": False,  # 代码式工作流默认不保留历史
+        "keep_run_history": keep_run_history,  # 默认不保留，仅为需要断点重试的工作流保留
     }
 
 

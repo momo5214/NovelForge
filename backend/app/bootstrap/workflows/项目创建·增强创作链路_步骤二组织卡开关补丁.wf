@@ -1,0 +1,17 @@
+# 工作流：项目创建·增强创作链路（补充：步骤二组织卡自动生成开关）
+# 说明：开关创建逻辑已并入主流程，本文件保留仅用于兼容旧实验模板。
+# 注意：默认不会在 enhanced 模板下触发，避免重复创建。
+
+#@node(description="触发器：增强模板项目创建")
+trigger = Trigger.ProjectCreated(template="enhanced_patch_only")
+#</node>
+
+
+#@node(description="创建步骤二组织卡自动生成开关")
+org_switch = Card.Create(
+    project_id=trigger.project_id,
+    card_type="通用文本",
+    title="ANG.M0/步骤二组织卡自动生成开关",
+    content={"enabled": "true"}
+  )
+#</node>

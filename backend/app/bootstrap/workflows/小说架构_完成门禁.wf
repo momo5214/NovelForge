@@ -1,0 +1,48 @@
+# 工作流：小说架构_完成门禁
+# 功能：当小说架构步骤卡保存后，检查 5 步是否都已完成，完成后自动补齐下游入口卡片
+# 触发器：小说架构步骤卡更新时自动触发
+
+#@node(description="触发器：监听小说架构步骤保存")
+trigger = Trigger.CardSaved(card_type="小说架构步骤", on_create=False, on_update=True)
+#</node>
+
+
+#@node(description="读取当前步骤卡")
+step_card = Card.Read(card_id=trigger.card_id)
+#</node>
+
+
+#@node(description="读取所有同父级步骤卡")
+all_steps = Card.Query(
+    project_id=trigger.project_id,
+    card_type="小说架构步骤",
+    parent_id=step_card.parent_id,
+    limit=20
+  )
+#</node>
+
+
+#@node(description="检查步骤是否全部完成")
+completion = Logic.Expression(
+    expression="{'step_count': len(all_steps.cards), 'filled_count': len([c for c in all_steps.cards if str(((c.get('content') or {}).get('content') or '')).strip()]), 'is_ready': len(all_steps.cards) == 5 and len([c for c in all_steps.cards if str(((c.get('content') or {}).get('content') or '')).strip()]) == 5}"
+  )
+#</node>
+
+
+#@node(description="仅在五步全部完成时准备核心蓝图入口卡")
+blueprint_items = Logic.Expression(
+    expression="[{'title': '核心蓝图'}] if completion.result.is_ready else []"
+  )
+#</node>
+
+
+#@node(description="补齐增强核心蓝图入口卡")
+blueprint = Card.BatchUpsert(
+    project_id=trigger.project_id,
+    parent_id=step_card.parent_id,
+    card_type="增强核心蓝图",
+    title_template="核心蓝图",
+    items=blueprint_items.result,
+    content_template={}
+  )
+#</node>

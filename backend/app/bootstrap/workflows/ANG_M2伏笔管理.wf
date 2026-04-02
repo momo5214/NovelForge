@@ -1,0 +1,253 @@
+# 工作流：ANG_M2伏笔管理
+# 功能：基于章节目录与正文草稿抽取伏笔候选，登记 ForeshadowItem，并生成未回收伏笔台账
+# 触发器：无（手动执行）
+
+#@node(description="选择项目")
+project = Logic.SelectProject(project_id=1, project_name=None)
+#</node>
+
+
+#@node(description="选择模型")
+llm = Logic.SelectLLM(llm_config_id=1, llm_name=None)
+#</node>
+
+
+#@node(description="查询章节正文卡")
+chapter_cards = Card.Query(
+    project_id=project.project_id,
+    card_type="章节正文",
+    limit=2000
+  )
+#</node>
+
+
+#@node(description="查询章节大纲卡")
+chapter_outline_cards = Card.Query(
+    project_id=project.project_id,
+    card_type="章节大纲",
+    limit=2000
+  )
+#</node>
+
+
+#@node(description="查询一致性文本卡")
+text_cards = Card.Query(
+    project_id=project.project_id,
+    card_type="通用文本",
+    limit=2000
+  )
+#</node>
+
+
+#@node(description="确定待处理伏笔章节")
+target = Logic.Expression(
+    expression="([pair[1] for pair in sorted([(int(((c.get('content') or {}).get('chapter_number') or 10**9)), c) for c in chapter_cards.cards]) if str(((pair[1].get('content') or {}).get('content') or '')).strip() and any([(((t.get('title') or '').startswith('ANG.M2/一致性审校报告-第' + str(int(((pair[1].get('content') or {}).get('chapter_number') or 0))) + '章')) or (((t.get('title') or '').startswith('一致性审校-第' + str(int(((pair[1].get('content') or {}).get('chapter_number') or 0))) + '章')))) for t in text_cards.cards]) and not any([(((t.get('title') or '').startswith('ANG.M2/伏笔治理报告-第' + str(int(((pair[1].get('content') or {}).get('chapter_number') or 0))) + '章')) or (((t.get('title') or '').startswith('伏笔治理-第' + str(int(((pair[1].get('content') or {}).get('chapter_number') or 0))) + '章')))) for t in text_cards.cards])] + [None])[0]"
+  )
+#</node>
+
+
+#@node(description="断言存在待处理章节")
+target_assert = Logic.Assert(
+    condition="target.result is not None",
+    message="未找到可用于伏笔处理的章节正文卡"
+  )
+#</node>
+
+
+#@node(description="提取伏笔处理上下文")
+foreshadow_context = Logic.Expression(
+    expression="{'chapter_number': int((target.result.get('content') or {}).get('chapter_number') or 0), 'chapter_title': str((target.result.get('content') or {}).get('title') or target.result.get('title') or ''), 'chapter_blueprint': str((([c.get('content', {}).get('overview') for c in chapter_outline_cards.cards if int(((c.get('content') or {}).get('chapter_number') or 0)) == int((target.result.get('content') or {}).get('chapter_number') or 0)] + [''])[0])), 'chapter_text': str((target.result.get('content') or {}).get('content') or ''), 'existing_ledger': str((([str((c.get('content') or {}).get('content') or '').strip() for c in text_cards.cards if (((c.get('title') or '').startswith('伏笔管理/未回收台账')) or ((c.get('title') or '').startswith('ANG.M2/伏笔台账-未回收'))) and str((c.get('content') or {}).get('content') or '').strip()] + [''])[0]))}"
+  )
+#</node>
+
+
+#@node(description="清洗章节标题")
+chapter_title_clean = Logic.Expression(
+    expression="(str(foreshadow_context.result.chapter_title or '').strip().replace('第' + str(int(foreshadow_context.result.chapter_number)) + '章', '', 1).strip() if str(foreshadow_context.result.chapter_title or '').strip().startswith('第' + str(int(foreshadow_context.result.chapter_number)) + '章') else str(foreshadow_context.result.chapter_title or '').strip()) or '未命名章节'"
+  )
+#</node>
+
+
+#@node(description="标准化章节标题")
+chapter_title_meta = Logic.Expression(
+    expression="{'title': str(chapter_title_clean.result or '未命名章节')}"
+  )
+#</node>
+
+
+#@node(description="生成章节展示标题")
+chapter_display_title = Logic.Expression(
+    expression="'第' + str(int(foreshadow_context.result.chapter_number)) + '章' + (' ' + str(chapter_title_meta.result.title) if str(chapter_title_meta.result.title or '').strip() else '')"
+  )
+#</node>
+
+
+#@node(description="构建伏笔处理变量")
+foreshadow_vars = Logic.Expression(
+    expression="{'novel_number': int(foreshadow_context.result.chapter_number), 'chapter_id': int(target.result.get('id') or 0), 'chapter_title': str(chapter_title_meta.result.title), 'chapter_blueprint': foreshadow_context.result.chapter_blueprint, 'chapter_text': foreshadow_context.result.chapter_text, 'existing_ledger': foreshadow_context.result.existing_ledger, 'foreshadowing_entries': (foreshadow_context.result.existing_ledger if str(foreshadow_context.result.existing_ledger).strip() else 'YF001(一般伏笔)-待提取-埋设-待提取（第6章前必须回收）\\nMF001(主线伏笔)-待提取-强化-待提取（第20章前必须回收）\\nCF001(人物伏笔)-待提取-触发-待提取（第15章前必须回收）'), 'foreshadowing_ids': ('\\n'.join([line.split('(')[0].strip() for line in (foreshadow_context.result.existing_ledger if str(foreshadow_context.result.existing_ledger).strip() else 'YF001(一般伏笔)-待提取-埋设-待提取（第6章前必须回收）\\nMF001(主线伏笔)-待提取-强化-待提取（第20章前必须回收）\\nCF001(人物伏笔)-待提取-触发-待提取（第15章前必须回收）').split('\\n') if line.strip() and '(' in line]) or 'YF001\\nMF001\\nCF001')}"
+  )
+#</node>
+
+
+#@node(description="读取伏笔总台账快照")
+foreshadow_total_ledger_snapshot = Logic.Expression(
+    expression="str((([str((c.get('content') or {}).get('content') or '').strip() for c in text_cards.cards if ((c.get('title') or '') == '伏笔管理/总台账') or ((c.get('title') or '') == 'ANG.M2/伏笔总台账')] + [''])[0]))"
+  )
+#</node>
+
+
+#@node(description="汇总历史伏笔治理报告")
+foreshadow_history_reports = Logic.Expression(
+    expression="'\\n\\n'.join([str((c.get('title') or '')).strip() + '\\n' + str((c.get('content') or {}).get('content') or '').strip() for c in text_cards.cards if (((c.get('title') or '').startswith('伏笔治理-第')) or ((c.get('title') or '').startswith('ANG.M2/伏笔治理报告-第'))) and str((c.get('content') or {}).get('content') or '').strip()])"
+  )
+#</node>
+
+
+#@node(description="整理伏笔历史资料源")
+foreshadow_history_source = Logic.Expression(
+    expression="'\\n\\n'.join([part for part in [('【未回收台账】\\n' + str(foreshadow_vars.result.existing_ledger).strip()), ('【伏笔总台账】\\n' + str(foreshadow_total_ledger_snapshot.result).strip()), ('【历史治理报告】\\n' + str(foreshadow_history_reports.result).strip())] if str(part).strip() and str(part).strip() not in ['【未回收台账】', '【伏笔总台账】', '【历史治理报告】']]).strip() or '暂无伏笔历史资料'"
+  )
+#</node>
+
+
+#@node(description="加载提示词：伏笔历史内容预处理")
+foreshadow_history_prompt = Prompt.Load(
+    prompt_id="增强伏笔历史整理",
+    variables={
+      "novel_number": "$foreshadow_vars.result.novel_number",
+      "chapter_title": "$foreshadow_vars.result.chapter_title",
+      "foreshadowing_ids": "$foreshadow_vars.result.foreshadowing_ids",
+      "foreshadowing_source": "$foreshadow_history_source.result"
+    }
+  )
+#</node>
+
+
+#@node(description="执行伏笔历史预处理")
+foreshadow_history_ai = AI.LLM(
+    llm_config_id=llm.llm_config_id,
+    user_prompt=foreshadow_history_prompt.text,
+    temperature=0.3,
+    max_tokens=4096,
+    timeout=150,
+    max_retry=3
+  )
+#</node>
+
+
+#@node(description="加载提示词：本章伏笔内容提取")
+foreshadow_content_prompt = Prompt.Load(
+    prompt_id="增强本章伏笔提取",
+    variables={
+      "novel_number": "$foreshadow_vars.result.novel_number",
+      "chapter_title": "$foreshadow_vars.result.chapter_title",
+      "foreshadowing_entries": "$foreshadow_vars.result.foreshadowing_entries",
+      "chapter_text": "$foreshadow_vars.result.chapter_text"
+    }
+  )
+#</node>
+
+
+#@node(description="执行本章伏笔内容提取")
+foreshadow_content_ai = AI.LLM(
+    llm_config_id=llm.llm_config_id,
+    user_prompt=foreshadow_content_prompt.text,
+    temperature=0.3,
+    max_tokens=4096,
+    timeout=150,
+    max_retry=3
+  )
+#</node>
+
+
+#@node(description="加载提示词：伏笔整合与台账")
+foreshadow_processing_prompt = Prompt.Load(
+    prompt_id="增强伏笔台账整合",
+    variables={
+      "novel_number": "$foreshadow_vars.result.novel_number",
+      "chapter_title": "$foreshadow_vars.result.chapter_title",
+      "foreshadowing_history": "$foreshadow_history_ai.response",
+      "current_foreshadowing_content": "$foreshadow_content_ai.response"
+    }
+  )
+#</node>
+
+
+#@node(description="执行伏笔整合与台账生成")
+foreshadow_processing_ai = AI.LLM(
+    llm_config_id=llm.llm_config_id,
+    user_prompt=foreshadow_processing_prompt.text,
+    temperature=0.35,
+    max_tokens=8192,
+    timeout=180,
+    max_retry=3
+  )
+#</node>
+
+
+#@node(description="生成本章伏笔治理报告标题")
+foreshadow_report_title = Logic.Expression(
+    expression="'伏笔治理-第' + str(int(foreshadow_vars.result.novel_number)) + '章-' + str(foreshadow_vars.result.chapter_title)"
+  )
+#</node>
+
+
+#@node(description="保存本章伏笔治理报告")
+foreshadow_report_card = Card.Create(
+    project_id=project.project_id,
+    card_type="通用文本",
+    title="$foreshadow_report_title.result",
+    content={"content": foreshadow_processing_ai.response}
+  )
+#</node>
+
+
+#@node(description="整理伏笔登记条目")
+foreshadow_register_payload = Logic.Expression(
+    expression="[{'title': f\"{fid} {'主线伏笔' if fid.startswith('MF') else '人物伏笔' if fid.startswith('CF') else '一般伏笔'}\", 'type': ('goal' if fid.startswith('MF') else 'person' if fid.startswith('CF') else 'item'), 'note': ((([line.strip() for line in str(foreshadow_processing_ai.response or '').split('\\n') if line.strip() and line.strip().startswith(fid + '(')] + [''])[0]) or str(foreshadow_processing_ai.response or '')[:200]), 'chapter_id': int(foreshadow_vars.result.chapter_id) if int(foreshadow_vars.result.chapter_id) > 0 else None, 'status': ('resolved' if ('-回收-' in (([line.strip() for line in str(foreshadow_processing_ai.response or '').split('\\n') if line.strip() and line.strip().startswith(fid + '(')] + [''])[0])) or ('已回收' in (([line.strip() for line in str(foreshadow_processing_ai.response or '').split('\\n') if line.strip() and line.strip().startswith(fid + '(')] + [''])[0])) else 'open')} for fid in [line.strip() for line in str(foreshadow_vars.result.foreshadowing_ids).split('\\n') if line.strip()]]"
+  )
+#</node>
+
+
+#@node(description="整理伏笔未回收台账内容")
+foreshadow_open_ledger_content = Logic.Expression(
+    expression="'\\n'.join([line.strip() for line in str(foreshadow_processing_ai.response or '').split('\\n') if line.strip() and '-回收-' not in line and '已回收' not in line]).strip() or '无未回收伏笔'"
+  )
+#</node>
+
+
+#@node(description="写入 ForeshadowItem 登记表")
+foreshadow_sync = Data.ForeshadowSync(
+    project_id=project.project_id,
+    items="$foreshadow_register_payload.result"
+  )
+#</node>
+
+
+#@node(description="拼接伏笔总台账内容")
+foreshadow_total_ledger_content = Logic.Expression(
+    expression="(str(foreshadow_total_ledger_snapshot.result or '').strip() + ('\\n\\n' if str(foreshadow_total_ledger_snapshot.result or '').strip() else '') + '## ' + str(chapter_display_title.result) + '\\n' + str(foreshadow_processing_ai.response or '').strip()).strip()"
+  )
+#</node>
+
+
+#@node(description="保存伏笔总台账")
+foreshadow_total_ledger_card = Card.BatchUpsert(
+    project_id=project.project_id,
+    card_type="通用文本",
+    title_template="伏笔管理/总台账",
+    items=[{"title": "伏笔管理/总台账", "content": "$foreshadow_total_ledger_content.result"}],
+    content_template={"content": "{item.content}"}
+  )
+#</node>
+
+
+#@node(description="保存伏笔未回收台账")
+foreshadow_open_ledger_card = Card.BatchUpsert(
+    project_id=project.project_id,
+    card_type="通用文本",
+    title_template="伏笔管理/未回收台账",
+    items=[{"title": "伏笔管理/未回收台账", "content": "$foreshadow_open_ledger_content.result"}],
+    content_template={"content": "{item.content}"}
+  )
+#</node>

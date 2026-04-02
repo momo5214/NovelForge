@@ -1,0 +1,730 @@
+# 工作流：增强章节闭环
+# 功能：按顺序生成下一章增强章节正文，并串联一致性审校与伏笔治理
+# 触发器：无（手动执行）
+#
+# 使用约束：
+# 1. 该工作流面向“下一章还是空正文”的正常推进场景。
+# 2. 若正文已生成但审校/伏笔治理中途失败，可在同一增强链路下再次执行补跑。
+
+#@node(description="解析执行项目ID")
+selected_project_id = Logic.Expression(
+    expression="int(default(project_id, 1) or 1)"
+  )
+#</node>
+
+
+#@node(description="解析执行模型ID")
+selected_llm_config_id = Logic.Expression(
+    expression="int(default(llm_config_id, 1) or 1)"
+  )
+#</node>
+
+
+#@node(description="解析目标章节卡ID")
+selected_target_card_id = Logic.Expression(
+    expression="int(default(target_card_id, 0) or 0)"
+  )
+#</node>
+
+
+#@node(description="选择项目")
+project = Logic.SelectProject(project_id=selected_project_id.result, project_name=None)
+#</node>
+
+
+#@node(description="选择模型")
+llm = Logic.SelectLLM(llm_config_id=selected_llm_config_id.result, llm_name=None)
+#</node>
+
+
+#@node(description="读取作品标签")
+tags_cards = Card.Query(
+    project_id=project.project_id,
+    card_type="作品标签",
+    limit=1
+  )
+#</node>
+
+
+#@node(description="读取增强写作指南")
+writing_guide_cards = Card.Query(
+    project_id=project.project_id,
+    card_type="增强写作指南",
+    limit=50
+  )
+#</node>
+
+
+#@node(description="读取增强章节正文卡")
+chapter_cards = Card.Query(
+    project_id=project.project_id,
+    card_type="增强章节正文",
+    limit=2000
+  )
+#</node>
+
+
+#@node(description="读取增强章节大纲卡")
+outline_cards = Card.Query(
+    project_id=project.project_id,
+    card_type="增强章节大纲",
+    limit=2000
+  )
+#</node>
+
+
+#@node(description="读取增强分卷大纲卡")
+volume_cards = Card.Query(
+    project_id=project.project_id,
+    card_type="增强分卷大纲",
+    limit=200
+  )
+#</node>
+
+
+#@node(description="读取角色卡")
+character_cards = Card.Query(
+    project_id=project.project_id,
+    card_type="角色卡",
+    limit=500
+  )
+#</node>
+
+
+#@node(description="读取治理文本卡")
+text_cards = Card.Query(
+    project_id=project.project_id,
+    card_type="通用文本",
+    limit=4000
+  )
+#</node>
+
+
+#@node(description="确保世界与资产容器卡存在")
+asset_hub = Card.BatchUpsert(
+    project_id=project.project_id,
+    card_type="通用文本",
+    title_template="世界与资产",
+    match_by="title",
+    items=[{"title": "世界与资产"}],
+    content_template={"content": ""}
+  )
+#</node>
+
+
+#@node(description="确定下一章目标")
+target = Logic.Expression(
+    expression="(([c for c in chapter_cards.cards if int(c.get('id') or 0) == int(selected_target_card_id.result)] + [([pair[1] for pair in sorted([(int(((c.get('content') or {}).get('chapter_number') or 10**9)), c) for c in chapter_cards.cards]) if not str(((pair[1].get('content') or {}).get('content') or '')).strip()] + [None])[0]])[0])"
+  )
+#</node>
+
+
+#@node(description="断言存在待生成章节")
+target_assert = Logic.Assert(
+    condition="target.result is not None",
+    message="未找到待生成的增强章节正文卡"
+  )
+#</node>
+
+
+#@node(description="构建章节上下文")
+chapter_ctx = Logic.Expression(
+    expression="{'chapter_number': int((target.result.get('content') or {}).get('chapter_number') or 0), 'chapter_title': str((target.result.get('content') or {}).get('title') or target.result.get('title') or ''), 'volume_number': int((target.result.get('content') or {}).get('volume_number') or 1), 'word_number': int((((tags_cards.cards[0].get('content') if tags_cards.cards else {}) or {}).get('chapter_word_count') or 3000)), 'genre': str((((tags_cards.cards[0].get('content') if tags_cards.cards else {}) or {}).get('theme') or '')), 'topic': str((((tags_cards.cards[0].get('content') if tags_cards.cards else {}) or {}).get('theme') or '')), 'existing_chapter_text': str(((target.result.get('content') or {}).get('content') or '')), 'existing_word_count': len(str(((target.result.get('content') or {}).get('content') or ''))), 'history_chapter_text': str((([c.get('content', {}).get('content') for c in chapter_cards.cards if int(((c.get('content') or {}).get('chapter_number') or 0)) == int((target.result.get('content') or {}).get('chapter_number') or 0) - 1 and str((c.get('content', {}).get('content') or '')).strip()] + [''])[0])), 'current_chapter_blueprint': str((([(c.get('content') or {}) for c in outline_cards.cards if int(((c.get('content') or {}).get('chapter_number') or 0)) == int((target.result.get('content') or {}).get('chapter_number') or 0)] + [{}])[0])), 'next_chapter_blueprint': str((([(c.get('content') or {}) for c in outline_cards.cards if int(((c.get('content') or {}).get('chapter_number') or 0)) == int((target.result.get('content') or {}).get('chapter_number') or 0) + 1] + [{}])[0])), 'volume_outline': str((([(c.get('content') or {}) for c in volume_cards.cards if int((c.get('content') or {}).get('volume_number') or -1) == int((target.result.get('content') or {}).get('volume_number') or 1)] + [{}])[0])), 'setting_characters': '\\n\\n'.join(['角色名：' + str((c.get('content') or {}).get('name') or '') + '\\n其他称谓：' + '、'.join(((c.get('content') or {}).get('aliases') or [])) + '\\n角色权重：' + str((c.get('content') or {}).get('role_weight') or '') + ' ' + str((c.get('content') or {}).get('role_tier') or '') + '\\n角色类型：' + str((c.get('content') or {}).get('role_type') or '') + '\\n身份：' + str((c.get('content') or {}).get('identity') or '') + '\\n角色功能：' + str((c.get('content') or {}).get('story_function') or '') + '\\n角色概述：' + str((c.get('content') or {}).get('description') or '') + '\\n性格：' + str((c.get('content') or {}).get('personality') or '') + '\\n核心驱动力：' + str((c.get('content') or {}).get('core_drive') or '') + '\\n内在冲突：' + str((c.get('content') or {}).get('inner_conflict') or '') + '\\n关系摘要：' + str((c.get('content') or {}).get('relationship_summary') or '') + '\\n角色弧光：' + str((c.get('content') or {}).get('character_arc') or '') + '\\n位置轨迹：' + ('；'.join([str((item or {}).get('location') or '') + '（第' + str((item or {}).get('chapter_number') or '') + '章）' for item in ((c.get('content') or {}).get('position_tracks') or [])]) or '无') + '\\n关键事件：' + ('；'.join(['第' + str((item or {}).get('chapter_number') or '') + '章[' + str((item or {}).get('event_type') or '') + '] ' + str((item or {}).get('summary') or '') for item in ((c.get('content') or {}).get('key_event_records') or [])]) or '无') + '\\n生命状态：' + str((c.get('content') or {}).get('life_state') or {}) + '\\n持有物品：' + str((c.get('content') or {}).get('inventory_items') or []) + '\\n技术能力：' + str((c.get('content') or {}).get('techniques') or []) + '\\n关系网：' + str((c.get('content') or {}).get('relationship_network') or []) + '\\n行为模式与决策偏好：' + str((c.get('content') or {}).get('behavior_decision_pattern') or {}) + '\\n语言风格与对话关键词：' + str((c.get('content') or {}).get('dialogue_style_keywords') or {}) + '\\n情感线状态：' + str((c.get('content') or {}).get('romance_state') or {}) + '\\n动态信息：' + str((c.get('content') or {}).get('dynamic_info') or {}) for c in character_cards.cards if str((c.get('content') or {}).get('name') or '').strip() and str((c.get('content') or {}).get('name') or '') in set(list((target.result.get('content') or {}).get('entity_list') or []))]), 'key_items': '\\n'.join((([item for c in outline_cards.cards if int(((c.get('content') or {}).get('chapter_number') or 0)) == int((target.result.get('content') or {}).get('chapter_number') or 0) for item in ((c.get('content') or {}).get('foreshadow_items') or [])] + []))), 'scene_location': str((([str((c.get('content') or {}).get('scene_location') or '').strip() for c in outline_cards.cards if int(((c.get('content') or {}).get('chapter_number') or 0)) == int((target.result.get('content') or {}).get('chapter_number') or 0) and str((c.get('content') or {}).get('scene_location') or '').strip()] + [''])[0])), 'time_constraint': str((([str((c.get('content') or {}).get('scene_time') or '').strip() for c in outline_cards.cards if int(((c.get('content') or {}).get('chapter_number') or 0)) == int((target.result.get('content') or {}).get('chapter_number') or 0) and str((c.get('content') or {}).get('scene_time') or '').strip()] + [''])[0])), 'user_guidance': str((([str((c.get('content') or {}).get('content') or '').strip() for c in writing_guide_cards.cards if int(((c.get('content') or {}).get('volume_number') or 0)) == int((target.result.get('content') or {}).get('volume_number') or 1) and str((c.get('content') or {}).get('content') or '').strip()] + [str((writing_guide_cards.cards[0].get('content') or {}).get('content') or '').strip() if writing_guide_cards.cards else ''])[0])), 'global_summary': str((([str((c.get('content') or {}).get('content') or '').strip() for c in text_cards.cards if (c.get('title') or '') == '前情摘要' and str((c.get('content') or {}).get('content') or '').strip()] + [''])[0])), 'plot_points': str((([str((c.get('content') or {}).get('content') or '').strip() for c in text_cards.cards if (((c.get('title') or '').startswith('ANG.M2/一致性审校报告-第' + str(int((target.result.get('content') or {}).get('chapter_number') or 0) - 1) + '章')) or ((c.get('title') or '').startswith('一致性审校-第' + str(int((target.result.get('content') or {}).get('chapter_number') or 0) - 1) + '章'))) and str((c.get('content') or {}).get('content') or '').strip()] + [''])[0])), 'knowledge_context': str((([str((c.get('content') or {}).get('content') or '').strip() for c in text_cards.cards if (((c.get('title') or '').startswith('伏笔管理/未回收台账')) or ((c.get('title') or '').startswith('ANG.M2/伏笔台账-未回收'))) and str((c.get('content') or {}).get('content') or '').strip()] + [''])[0])), 'word_count_min': max(1000, int((((tags_cards.cards[0].get('content') if tags_cards.cards else {}) or {}).get('chapter_word_count') or 3000)) - 600), 'word_count_max': int((((tags_cards.cards[0].get('content') if tags_cards.cards else {}) or {}).get('chapter_word_count') or 3000)) + 600}"
+  )
+#</node>
+
+
+#@node(description="清洗章节标题")
+chapter_title_clean = Logic.Expression(
+    expression="(str(chapter_ctx.result.chapter_title or '').strip().replace('第' + str(int(chapter_ctx.result.chapter_number)) + '章', '', 1).strip() if str(chapter_ctx.result.chapter_title or '').strip().startswith('第' + str(int(chapter_ctx.result.chapter_number)) + '章') else str(chapter_ctx.result.chapter_title or '').strip()) or '未命名章节'"
+  )
+#</node>
+
+
+#@node(description="标准化章节标题")
+chapter_title_meta = Logic.Expression(
+    expression="{'title': str(chapter_title_clean.result or '未命名章节')}"
+  )
+#</node>
+
+
+#@node(description="生成章节展示标题")
+chapter_display_title = Logic.Expression(
+    expression="'第' + str(int(chapter_ctx.result.chapter_number)) + '章' + (' ' + str(chapter_title_meta.result.title) if str(chapter_title_meta.result.title or '').strip() else '')"
+  )
+#</node>
+
+
+#@node(description="读取当前章大纲对象")
+current_outline_content = Logic.Expression(
+    expression="(([(c.get('content') or {}) for c in outline_cards.cards if int(((c.get('content') or {}).get('chapter_number') or 0)) == int(chapter_ctx.result.chapter_number)] + [{}])[0])"
+  )
+#</node>
+
+
+#@node(description="标准化当前章伏笔计划")
+current_foreshadow_plan = Logic.Expression(
+    expression="normalize_foreshadow_plan((current_outline_content.result.get('foreshadow_plan_items') or current_outline_content.result.get('foreshadow_items') or []))"
+  )
+#</node>
+
+
+#@node(description="检查到期未回收伏笔是否已在本章响应")
+foreshadow_due_gate = Logic.Expression(
+    expression="foreshadow_lifecycle_gate(int(chapter_ctx.result.chapter_number), str(chapter_ctx.result.knowledge_context or ''), current_foreshadow_plan.result)"
+  )
+#</node>
+
+
+#@node(description="检查上一章审校前置条件")
+review_guard = Logic.Expression(
+    expression="True if int(chapter_ctx.result.chapter_number) <= 1 else any([((c.get('title') or '').startswith('ANG.M2/一致性审校报告-第' + str(int(chapter_ctx.result.chapter_number) - 1) + '章')) or ((c.get('title') or '').startswith('一致性审校-第' + str(int(chapter_ctx.result.chapter_number) - 1) + '章')) for c in text_cards.cards])"
+  )
+#</node>
+
+
+#@node(description="检查上一章伏笔治理前置条件")
+foreshadow_guard = Logic.Expression(
+    expression="True if int(chapter_ctx.result.chapter_number) <= 1 else any([((c.get('title') or '').startswith('ANG.M2/伏笔治理报告-第' + str(int(chapter_ctx.result.chapter_number) - 1) + '章')) or ((c.get('title') or '').startswith('伏笔治理-第' + str(int(chapter_ctx.result.chapter_number) - 1) + '章')) for c in text_cards.cards])"
+  )
+#</node>
+
+
+#@node(description="断言通过上一章一致性审校门禁")
+review_assert = Logic.Assert(
+    condition="review_guard.result",
+    message="上一章尚未完成一致性审校，禁止继续生成下一章"
+  )
+#</node>
+
+
+#@node(description="断言通过上一章伏笔治理门禁")
+foreshadow_assert = Logic.Assert(
+    condition="foreshadow_guard.result",
+    message="上一章尚未完成伏笔治理，禁止继续生成下一章"
+  )
+#</node>
+
+
+#@node(description="断言当前章已响应到期伏笔")
+foreshadow_due_assert = Logic.Assert(
+    condition="foreshadow_due_gate.result.get('allow', True)",
+    message="当前章节目录未响应到期未回收伏笔，请先在增强章节大纲中安排对应伏笔推进或回收"
+  )
+#</node>
+
+
+#@node(description="读取上一章剧情要点卡")
+previous_plot_points_card = Logic.Expression(
+    expression="str((([str((c.get('content') or {}).get('content') or '').strip() for c in text_cards.cards if (((c.get('title') or '').startswith('剧情要点-第' + str(int((target.result.get('content') or {}).get('chapter_number') or 0) - 1) + '章')) or ((c.get('title') or '').startswith('ANG.M1/剧情要点-第' + str(int((target.result.get('content') or {}).get('chapter_number') or 0) - 1) + '章'))) and str((c.get('content') or {}).get('content') or '').strip()] + [''])[0]))"
+  )
+#</node>
+
+
+#@node(description="读取上一章审校兜底内容")
+previous_review_fallback = Logic.Expression(
+    expression="str((([str((c.get('content') or {}).get('content') or '').strip() for c in text_cards.cards if (((c.get('title') or '').startswith('ANG.M2/一致性审校报告-第' + str(int((target.result.get('content') or {}).get('chapter_number') or 0) - 1) + '章')) or ((c.get('title') or '').startswith('一致性审校-第' + str(int((target.result.get('content') or {}).get('chapter_number') or 0) - 1) + '章'))) and str((c.get('content') or {}).get('content') or '').strip()] + [''])[0]))"
+  )
+#</node>
+
+
+#@node(description="读取上一章独立剧情要点")
+previous_plot_points = Logic.Expression(
+    expression="str(previous_plot_points_card.result or previous_review_fallback.result or '')"
+  )
+#</node>
+
+
+#@node(description="整理当前角色数据库摘要")
+character_database_text = Logic.Expression(
+    expression="'\\n\\n'.join(['角色编号：' + str((c.get('content') or {}).get('character_code') or '未编号') + '\\n角色名：' + str((c.get('content') or {}).get('name') or c.get('title') or '') + '\\n其他称谓：' + '、'.join(((c.get('content') or {}).get('aliases') or [])) + '\\n角色类型：' + str((c.get('content') or {}).get('role_type') or '') + '\\n身份：' + str((c.get('content') or {}).get('identity') or '') + '\\n角色概述：' + str((c.get('content') or {}).get('description') or '') for c in character_cards.cards if str((c.get('content') or {}).get('name') or c.get('title') or '').strip()])"
+  )
+#</node>
+
+
+#@node(description="构建章节前角色规划提示词")
+character_planning_user_prompt = Logic.Expression(
+    expression="f'''【章节基本信息】\\n当前卷：第{int(chapter_ctx.result.volume_number)}卷\\n当前章：第{int(chapter_ctx.result.chapter_number)}章《{str(chapter_title_meta.result.title)}》\\n\\n【当前章节目录】\\n{str(chapter_ctx.result.current_chapter_blueprint or '')}\\n\\n【下一章目录】\\n{str(chapter_ctx.result.next_chapter_blueprint or '')}\\n\\n【上一章正文】\\n{str(chapter_ctx.result.history_chapter_text or '')}\\n\\n【已有角色库】\\n{str(character_database_text.result or '无')}\\n\\n【章节预设角色状态】\\n{str(chapter_ctx.result.setting_characters or '无')}'''"
+  )
+#</node>
+
+
+#@node(description="结构化规划本章角色")
+character_planning = AI.StructuredGenerate(
+    llm_config_id=llm.llm_config_id,
+    user_prompt=character_planning_user_prompt.result,
+    response_model_id="ChapterCharacterPlanningResult",
+    context={"selected_existing_names": [], "new_characters": [], "final_character_names": []},
+    prompt_template="增强章节角色规划",
+    max_retry=2,
+    timeout=120,
+    temperature=0.2,
+    use_instruction_flow=True,
+    fail_soft=True
+  )
+#</node>
+
+
+#@node(description="生成章节候选角色写回内容")
+candidate_character_payload = Logic.Expression(
+    expression="build_candidate_character_content_update((target.result.get('content') or {}), (character_planning.data or {}), character_cards.cards)"
+  )
+#</node>
+
+
+#@node(description="写回章节候选角色")
+candidate_character_saved = Card.Update(
+    card_id=target.result.id,
+    content_merge={
+      "entity_list": "$candidate_character_payload.result.entity_list",
+      "candidate_existing_names": "$candidate_character_payload.result.candidate_existing_names",
+      "candidate_characters": "$candidate_character_payload.result.candidate_characters",
+      "candidate_final_character_names": "$candidate_character_payload.result.candidate_final_character_names",
+      "candidate_character_summary": "$candidate_character_payload.result.candidate_character_summary",
+      "candidate_character_status": "$candidate_character_payload.result.candidate_character_status",
+      "candidate_character_prepared_at": "$candidate_character_payload.result.candidate_character_prepared_at"
+    }
+  )
+#</node>
+
+
+#@node(description="整理已选中已有角色摘要")
+planned_existing_character_summaries = Logic.Expression(
+    expression="'\\n\\n'.join(['角色名：' + str((c.get('content') or {}).get('name') or '') + '\\n角色编号：' + str((c.get('content') or {}).get('character_code') or '未编号') + '\\n其他称谓：' + '、'.join(((c.get('content') or {}).get('aliases') or [])) + '\\n角色权重：' + str((c.get('content') or {}).get('role_weight') or '') + ' ' + str((c.get('content') or {}).get('role_tier') or '') + '\\n角色类型：' + str((c.get('content') or {}).get('role_type') or '') + '\\n身份：' + str((c.get('content') or {}).get('identity') or '') + '\\n角色功能：' + str((c.get('content') or {}).get('story_function') or '') + '\\n角色概述：' + str((c.get('content') or {}).get('description') or '') + '\\n性格：' + str((c.get('content') or {}).get('personality') or '') + '\\n核心驱动力：' + str((c.get('content') or {}).get('core_drive') or '') + '\\n内在冲突：' + str((c.get('content') or {}).get('inner_conflict') or '') + '\\n关系摘要：' + str((c.get('content') or {}).get('relationship_summary') or '') + '\\n角色弧光：' + str((c.get('content') or {}).get('character_arc') or '') + '\\n位置轨迹：' + ('；'.join([str((item or {}).get('location') or '') + '（第' + str((item or {}).get('chapter_number') or '') + '章）' for item in ((c.get('content') or {}).get('position_tracks') or [])]) or '无') + '\\n关键事件：' + ('；'.join(['第' + str((item or {}).get('chapter_number') or '') + '章[' + str((item or {}).get('event_type') or '') + '] ' + str((item or {}).get('summary') or '') for item in ((c.get('content') or {}).get('key_event_records') or [])]) or '无') for c in character_cards.cards if str((c.get('content') or {}).get('name') or '').strip() and str((c.get('content') or {}).get('name') or '') in set((candidate_character_payload.result.get('candidate_existing_names') or []))])"
+  )
+#</node>
+
+
+#@node(description="整理本章新增角色摘要")
+planned_new_character_summaries = Logic.Expression(
+    expression="str(candidate_character_payload.result.get('candidate_character_summary') or '')"
+  )
+#</node>
+
+
+#@node(description="构建正文最终角色状态上下文")
+planned_setting_characters = Logic.Expression(
+    expression="'\\n\\n'.join([part for part in [str(planned_existing_character_summaries.result or '').strip(), str(planned_new_character_summaries.result or '').strip()] if part]).strip() or str(chapter_ctx.result.setting_characters or '')"
+  )
+#</node>
+
+
+#@node(description="加载章节草稿提示词")
+chapter_prompt = Prompt.Load(
+    prompt_id="增强章节正文草稿",
+    variables={
+      "existing_chapter_text": "$chapter_ctx.result.existing_chapter_text",
+      "existing_word_count": "$chapter_ctx.result.existing_word_count",
+      "history_chapter_text": "$chapter_ctx.result.history_chapter_text",
+      "genre": "$chapter_ctx.result.genre",
+      "topic": "$chapter_ctx.result.topic",
+      "novel_number": "$chapter_ctx.result.chapter_number",
+      "chapter_title": "$chapter_title_meta.result.title",
+      "word_number": "$chapter_ctx.result.word_number",
+      "key_items": "$chapter_ctx.result.key_items",
+      "scene_location": "$chapter_ctx.result.scene_location",
+      "time_constraint": "$chapter_ctx.result.time_constraint",
+      "user_guidance": "$chapter_ctx.result.user_guidance",
+      "current_chapter_blueprint": "$chapter_ctx.result.current_chapter_blueprint",
+      "next_chapter_blueprint": "$chapter_ctx.result.next_chapter_blueprint",
+      "volume_outline": "$chapter_ctx.result.volume_outline",
+      "global_summary": "$chapter_ctx.result.global_summary",
+      "plot_points": "$previous_plot_points.result",
+      "setting_characters": "$planned_setting_characters.result",
+      "knowledge_context": "$chapter_ctx.result.knowledge_context",
+      "word_count_min": "$chapter_ctx.result.word_count_min",
+      "word_count_max": "$chapter_ctx.result.word_count_max"
+    }
+  )
+#</node>
+
+
+#@node(description="生成章节正文")
+chapter_ai = AI.LLM(
+    llm_config_id=llm.llm_config_id,
+    user_prompt=chapter_prompt.text,
+    temperature=0.75,
+    max_tokens=8192,
+    timeout=180,
+    max_retry=3
+  )
+#</node>
+
+
+#@node(description="写回目标章节正文卡")
+chapter_saved = Card.Update(
+    card_id=target.result.id,
+    content_merge={
+      "content": "$chapter_ai.response"
+    }
+  )
+#</node>
+
+
+#@node(description="加载提示词：剧情要点提取")
+plot_points_prompt = Prompt.Load(
+    prompt_id="增强剧情要点提取",
+    variables={
+      "novel_number": "$chapter_ctx.result.chapter_number",
+      "chapter_title": "$chapter_title_meta.result.title",
+      "current_chapter_blueprint": "$chapter_ctx.result.current_chapter_blueprint",
+      "chapter_text": "$chapter_ai.response"
+    }
+  )
+#</node>
+
+
+#@node(description="提取当前章剧情要点")
+plot_points_ai = AI.LLM(
+    llm_config_id=llm.llm_config_id,
+    user_prompt=plot_points_prompt.text,
+    temperature=0.2,
+    max_tokens=2048,
+    timeout=120,
+    max_retry=3
+  )
+#</node>
+
+
+#@node(description="生成剧情要点标题")
+plot_points_title = Logic.Expression(
+    expression="'剧情要点-第' + str(int(chapter_ctx.result.chapter_number)) + '章-' + str(chapter_title_meta.result.title)"
+  )
+#</node>
+
+
+#@node(description="保存当前章剧情要点")
+plot_points_card = Card.BatchUpsert(
+    project_id=project.project_id,
+    parent_id=target.result.parent_id,
+    card_type="通用文本",
+    title_template="{item.title}",
+    match_by="title",
+    items=[{"title": "$plot_points_title.result", "content": "$plot_points_ai.response"}],
+    content_template={"content": "{item.content}"}
+  )
+#</node>
+
+
+#@node(description="构建审校上下文")
+review_context = Logic.Expression(
+    expression="{'chapter_number': int(chapter_ctx.result.chapter_number), 'chapter_title': str(chapter_title_meta.result.title), 'volume_number': int(chapter_ctx.result.volume_number), 'chapter_text': str(chapter_ai.response or ''), 'chapter_blueprint': str(chapter_ctx.result.current_chapter_blueprint), 'next_chapter_blueprint': str(chapter_ctx.result.next_chapter_blueprint), 'volume_outline': str(chapter_ctx.result.volume_outline), 'global_summary': str(chapter_ctx.result.global_summary), 'plot_points': str(previous_plot_points.result or ''), 'foreshadow_ledger': str(chapter_ctx.result.knowledge_context)}"
+  )
+#</node>
+
+
+#@node(description="构建一致性审校变量")
+review_vars = Logic.Expression(
+    expression="{'novel_number': int(review_context.result.chapter_number), 'word_number': int(chapter_ctx.result.word_number), 'genre': str(chapter_ctx.result.genre or '玄幻'), 'chapter_title': review_context.result.chapter_title, 'chapter_word_count': len(review_context.result.chapter_text), 'user_guidance': str(chapter_ctx.result.user_guidance), 'current_chapter_blueprint': review_context.result.chapter_blueprint, 'next_chapter_blueprint': review_context.result.next_chapter_blueprint, 'volume_outline': review_context.result.volume_outline, 'global_summary': review_context.result.global_summary, 'plot_points': review_context.result.plot_points, 'knowledge_context': review_context.result.foreshadow_ledger, 'Review_text': review_context.result.chapter_text, 'plot_twist_level': '2', 'word_count_min': int(chapter_ctx.result.word_count_min), 'word_count_max': int(chapter_ctx.result.word_count_max)}"
+  )
+#</node>
+
+
+#@node(description="加载提示词：一致性审校")
+review_prompt = Prompt.Load(
+    prompt_id="增强一致性审校",
+    variables={
+      "novel_number": "$review_vars.result.novel_number",
+      "chapter_title": "$review_vars.result.chapter_title",
+      "word_number": "$review_vars.result.word_number",
+      "genre": "$review_vars.result.genre",
+      "chapter_word_count": "$review_vars.result.chapter_word_count",
+      "user_guidance": "$review_vars.result.user_guidance",
+      "current_chapter_blueprint": "$review_vars.result.current_chapter_blueprint",
+      "next_chapter_blueprint": "$review_vars.result.next_chapter_blueprint",
+      "volume_outline": "$review_vars.result.volume_outline",
+      "global_summary": "$review_vars.result.global_summary",
+      "plot_points": "$review_vars.result.plot_points",
+      "knowledge_context": "$review_vars.result.knowledge_context",
+      "Review_text": "$review_vars.result.Review_text",
+      "plot_twist_level": "$review_vars.result.plot_twist_level",
+      "word_count_min": "$review_vars.result.word_count_min",
+      "word_count_max": "$review_vars.result.word_count_max"
+    }
+  )
+#</node>
+
+
+#@node(description="执行一致性审校")
+review_ai = AI.LLM(
+    llm_config_id=llm.llm_config_id,
+    user_prompt=review_prompt.text,
+    temperature=0.35,
+    max_tokens=8192,
+    timeout=180,
+    max_retry=3
+  )
+#</node>
+
+
+#@node(description="生成审校报告标题")
+review_title = Logic.Expression(
+    expression="'一致性审校-第' + str(int(review_vars.result.novel_number)) + '章-' + str(review_vars.result.chapter_title)"
+  )
+#</node>
+
+
+#@node(description="保存一致性审校报告")
+review_card = Card.BatchUpsert(
+    project_id=project.project_id,
+    parent_id=target.result.parent_id,
+    card_type="通用文本",
+    title_template="{item.title}",
+    match_by="title",
+    items=[{"title": "$review_title.result", "content": "$review_ai.response"}],
+    content_template={"content": "{item.content}"}
+  )
+#</node>
+
+
+#@node(description="提取伏笔处理上下文")
+foreshadow_context = Logic.Expression(
+    expression="{'chapter_number': int(chapter_ctx.result.chapter_number), 'chapter_title': str(chapter_title_meta.result.title), 'chapter_blueprint': str(chapter_ctx.result.current_chapter_blueprint), 'chapter_text': str(chapter_ai.response or ''), 'existing_ledger': str(chapter_ctx.result.knowledge_context)}"
+  )
+#</node>
+
+
+#@node(description="构建伏笔处理变量")
+foreshadow_vars = Logic.Expression(
+    expression="build_foreshadow_processing_vars(foreshadow_context.result.chapter_number, target.result.get('id') or 0, foreshadow_context.result.chapter_title or ('第' + str(int(foreshadow_context.result.chapter_number)) + '章'), foreshadow_context.result.chapter_blueprint, foreshadow_context.result.chapter_text, foreshadow_context.result.existing_ledger, current_foreshadow_plan.result)"
+  )
+#</node>
+
+
+#@node(description="读取伏笔总台账快照")
+foreshadow_total_ledger_snapshot = Logic.Expression(
+    expression="str((([str((c.get('content') or {}).get('content') or '').strip() for c in text_cards.cards if ((c.get('title') or '') == '伏笔管理/总台账') or ((c.get('title') or '') == 'ANG.M2/伏笔总台账')] + [''])[0]))"
+  )
+#</node>
+
+
+#@node(description="汇总历史伏笔治理报告")
+foreshadow_history_reports = Logic.Expression(
+    expression="'\\n\\n'.join([str((c.get('title') or '')).strip() + '\\n' + str((c.get('content') or {}).get('content') or '').strip() for c in text_cards.cards if (((c.get('title') or '').startswith('伏笔治理-第')) or ((c.get('title') or '').startswith('ANG.M2/伏笔治理报告-第'))) and str((c.get('content') or {}).get('content') or '').strip()])"
+  )
+#</node>
+
+
+#@node(description="整理伏笔历史资料源")
+foreshadow_history_source = Logic.Expression(
+    expression="'\\n\\n'.join([part for part in [('【未回收台账】\\n' + str(foreshadow_vars.result.existing_ledger).strip()), ('【伏笔总台账】\\n' + str(foreshadow_total_ledger_snapshot.result).strip()), ('【历史治理报告】\\n' + str(foreshadow_history_reports.result).strip())] if str(part).strip() and str(part).strip() not in ['【未回收台账】', '【伏笔总台账】', '【历史治理报告】']]).strip() or '暂无伏笔历史资料'"
+  )
+#</node>
+
+
+#@node(description="加载提示词：伏笔历史内容预处理")
+foreshadow_history_prompt = Prompt.Load(
+    prompt_id="增强伏笔历史整理",
+    variables={
+      "novel_number": "$foreshadow_vars.result.novel_number",
+      "chapter_title": "$foreshadow_vars.result.chapter_title",
+      "foreshadowing_ids": "$foreshadow_vars.result.foreshadowing_ids",
+      "foreshadowing_source": "$foreshadow_history_source.result"
+    }
+  )
+#</node>
+
+
+#@node(description="执行伏笔历史预处理")
+foreshadow_history_ai = AI.LLM(
+    llm_config_id=llm.llm_config_id,
+    user_prompt=foreshadow_history_prompt.text,
+    temperature=0.3,
+    max_tokens=4096,
+    timeout=150,
+    max_retry=3
+  )
+#</node>
+
+
+#@node(description="加载提示词：本章伏笔内容提取")
+foreshadow_content_prompt = Prompt.Load(
+    prompt_id="增强本章伏笔提取",
+    variables={
+      "novel_number": "$foreshadow_vars.result.novel_number",
+      "chapter_title": "$foreshadow_vars.result.chapter_title",
+      "foreshadowing_entries": "$foreshadow_vars.result.foreshadowing_entries",
+      "chapter_text": "$foreshadow_vars.result.chapter_text"
+    }
+  )
+#</node>
+
+
+#@node(description="执行本章伏笔内容提取")
+foreshadow_content_ai = AI.LLM(
+    llm_config_id=llm.llm_config_id,
+    user_prompt=foreshadow_content_prompt.text,
+    temperature=0.3,
+    max_tokens=4096,
+    timeout=150,
+    max_retry=3
+  )
+#</node>
+
+
+#@node(description="加载提示词：伏笔整合与台账")
+foreshadow_processing_prompt = Prompt.Load(
+    prompt_id="增强伏笔台账整合",
+    variables={
+      "novel_number": "$foreshadow_vars.result.novel_number",
+      "chapter_title": "$foreshadow_vars.result.chapter_title",
+      "foreshadowing_history": "$foreshadow_history_ai.response",
+      "current_foreshadowing_content": "$foreshadow_content_ai.response"
+    }
+  )
+#</node>
+
+
+#@node(description="执行伏笔整合与台账生成")
+foreshadow_processing_ai = AI.LLM(
+    llm_config_id=llm.llm_config_id,
+    user_prompt=foreshadow_processing_prompt.text,
+    temperature=0.35,
+    max_tokens=8192,
+    timeout=180,
+    max_retry=3
+  )
+#</node>
+
+
+#@node(description="生成本章伏笔治理报告标题")
+foreshadow_report_title = Logic.Expression(
+    expression="'伏笔治理-第' + str(int(foreshadow_vars.result.novel_number)) + '章-' + str(foreshadow_vars.result.chapter_title)"
+  )
+#</node>
+
+
+#@node(description="保存本章伏笔治理报告")
+foreshadow_report_card = Card.BatchUpsert(
+    project_id=project.project_id,
+    parent_id=target.result.parent_id,
+    card_type="通用文本",
+    title_template="{item.title}",
+    match_by="title",
+    items=[{"title": "$foreshadow_report_title.result", "content": "$foreshadow_processing_ai.response"}],
+    content_template={"content": "{item.content}"}
+  )
+#</node>
+
+
+#@node(description="整理伏笔登记条目")
+foreshadow_register_payload = Logic.Expression(
+    expression="build_foreshadow_register_payload(foreshadow_vars.result.foreshadowing_ids, foreshadow_processing_ai.response, foreshadow_vars.result.chapter_id if int(foreshadow_vars.result.chapter_id) > 0 else None, foreshadow_vars.result.novel_number)"
+  )
+#</node>
+
+
+#@node(description="整理伏笔未回收台账内容")
+foreshadow_open_ledger_content = Logic.Expression(
+    expression="build_open_foreshadow_ledger(foreshadow_processing_ai.response)"
+  )
+#</node>
+
+
+#@node(description="写入 ForeshadowItem 登记表")
+foreshadow_sync = Data.ForeshadowSync(
+    project_id=project.project_id,
+    items="$foreshadow_register_payload.result"
+  )
+#</node>
+
+
+#@node(description="拼接伏笔总台账内容")
+foreshadow_total_ledger_content = Logic.Expression(
+    expression="(str(foreshadow_total_ledger_snapshot.result or '').strip() + ('\\n\\n' if str(foreshadow_total_ledger_snapshot.result or '').strip() else '') + '## ' + str(chapter_display_title.result) + '\\n' + str(foreshadow_processing_ai.response or '').strip()).strip()"
+  )
+#</node>
+
+
+#@node(description="保存伏笔总台账")
+foreshadow_total_ledger_card = Card.BatchUpsert(
+    project_id=project.project_id,
+    card_type="通用文本",
+    title_template="伏笔管理/总台账",
+    items=[{"title": "伏笔管理/总台账", "content": "$foreshadow_total_ledger_content.result"}],
+    content_template={"content": "{item.content}"}
+  )
+#</node>
+
+
+#@node(description="保存伏笔未回收台账")
+foreshadow_open_ledger_card = Card.BatchUpsert(
+    project_id=project.project_id,
+    card_type="通用文本",
+    title_template="伏笔管理/未回收台账",
+    items=[{"title": "伏笔管理/未回收台账", "content": "$foreshadow_open_ledger_content.result"}],
+    content_template={"content": "{item.content}"}
+  )
+#</node>
+
+
+#@node(description="构建前情摘要变量")
+summary_vars = Logic.Expression(
+    expression="{'chapter_text': str(chapter_ai.response or ''), 'global_summary': str(chapter_ctx.result.global_summary or '')}"
+  )
+#</node>
+
+
+#@node(description="加载提示词：前情摘要更新")
+summary_prompt = Prompt.Load(
+    prompt_id="增强前情摘要",
+    variables={
+      "chapter_text": "$summary_vars.result.chapter_text",
+      "global_summary": "$summary_vars.result.global_summary"
+    }
+  )
+#</node>
+
+
+#@node(description="更新前情摘要")
+summary_ai = AI.LLM(
+    llm_config_id=llm.llm_config_id,
+    user_prompt=summary_prompt.text,
+    temperature=0.3,
+    max_tokens=4096,
+    timeout=150,
+    max_retry=3
+  )
+#</node>
+
+
+#@node(description="保存前情摘要")
+summary_card = Card.BatchUpsert(
+    project_id=project.project_id,
+    card_type="通用文本",
+    title_template="前情摘要",
+    items=[{"title": "前情摘要", "content": "$summary_ai.response"}],
+    content_template={"content": "{item.content}"}
+  )
+#</node>
+
+
+#@node(description="构建角色状态更新提示词")
+character_state_user_prompt = Logic.Expression(
+    expression="f'''【章节基本信息】\\n当前卷：第{int(chapter_ctx.result.volume_number)}卷\\n当前章：第{int(chapter_ctx.result.chapter_number)}章《{str(chapter_title_meta.result.title)}》\\n\\n【本章参与角色当前状态】\\n{str(planned_setting_characters.result or '无')}\\n\\n【当前章节正文】\\n{str(chapter_ai.response or '')}\\n\\n请仅更新上述已经列出的角色；如果某个角色本章没有明确变化，可以不输出该角色。'''"
+  )
+#</node>
+
+
+#@node(description="结构化提取角色状态更新")
+character_state_extract = AI.StructuredGenerate(
+    llm_config_id=llm.llm_config_id,
+    user_prompt=character_state_user_prompt.result,
+    response_model_id="UpdateCharacterState",
+    context={"state_list": []},
+    prompt_template="角色状态更新",
+    max_retry=2,
+    timeout=120,
+    temperature=0.2,
+    use_instruction_flow=False,
+    fail_soft=True
+  )
+#</node>
+
+
+#@node(description="按权重回写角色卡状态")
+character_state_saved = Data.CharacterStateUpdate(
+    project_id=project.project_id,
+    data="$character_state_extract.data"
+  )
+#</node>

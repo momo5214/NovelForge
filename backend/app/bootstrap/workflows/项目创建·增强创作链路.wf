@@ -1,0 +1,221 @@
+# 工作流：项目创建·增强创作链路
+# 功能：创建增强模板项目时，仅自动建卡，不自动生成 AI 内容
+# 触发器：项目创建时自动触发（template=enhanced）
+
+#@node(description="触发器：监听增强模板项目创建")
+trigger = Trigger.ProjectCreated(template="enhanced")
+#</node>
+
+
+#@node(description="创建作品标签")
+tags = Card.Create(
+    project_id=trigger.project_id,
+    card_type="作品标签",
+    title="作品标签",
+    content={
+      "theme": "",
+      "audience": "通用",
+      "narrative_person": "第三人称",
+      "story_tags": [],
+      "affection": "",
+      "total_chapters": 60,
+      "volume_count": 3,
+      "chapter_word_count": 3000
+    }
+  )
+#</node>
+
+
+#@node(description="创建金手指")
+power = Card.Create(
+    project_id=trigger.project_id,
+    card_type="金手指",
+    title="金手指"
+  )
+#</node>
+
+
+#@node(description="创建一句话梗概")
+one_sentence = Card.Create(
+    project_id=trigger.project_id,
+    card_type="一句话梗概",
+    title="一句话梗概"
+  )
+#</node>
+
+
+#@node(description="创建故事大纲")
+overview = Card.Create(
+    project_id=trigger.project_id,
+    card_type="故事大纲",
+    title="故事大纲"
+  )
+#</node>
+
+
+#@node(description="创建小说架构父卡")
+architecture = Card.Create(
+    project_id=trigger.project_id,
+    card_type="小说架构",
+    title="小说架构"
+  )
+#</node>
+
+
+#@node(description="创建世界与资产容器卡")
+asset_hub = Card.Create(
+    project_id=trigger.project_id,
+    card_type="通用文本",
+    title="世界与资产",
+    content={"content": ""}
+  )
+#</node>
+
+
+#@node(description="创建小说架构步骤卡")
+architecture_steps = Card.BatchUpsert(
+    project_id=trigger.project_id,
+    parent_id=architecture.id,
+    card_type="小说架构步骤",
+    title_template="步骤{item.step}：{item.name}",
+    items=[
+      {"step": 1, "name": "分卷使命宣言", "prompt_name": "ANG.M0.architecture_step1_mission", "content": ""},
+      {"step": 2, "name": "世界观与冲突发生器", "prompt_name": "ANG.M0.architecture_step2_worldview", "content": ""},
+      {"step": 3, "name": "情节线与推进机制", "prompt_name": "ANG.M0.architecture_step3_plot", "content": ""},
+      {"step": 4, "name": "核心角色规划", "prompt_name": "ANG.M0.architecture_step4_character", "content": ""},
+      {"step": 5, "name": "叙事风格与文本策略", "prompt_name": "ANG.M0.architecture_step5_style", "content": ""}
+    ],
+    content_template={
+      "content": "{item.content}",
+      "step": "{item.step}",
+      "step_name": "{item.name}",
+      "prompt_name": "{item.prompt_name}"
+    }
+  )
+#</node>
+
+
+#@node(description="为步骤卡补齐上下文模板")
+architecture_step_context_1 = Card.Update(
+    card_id=architecture_steps.cards[0].id,
+    content_merge={
+      "step": 1,
+      "step_name": "分卷使命宣言",
+      "prompt_name": "ANG.M0.architecture_step1_mission",
+      "ai_context_template": "作品标签: @作品标签.content\n故事大纲: @故事大纲.content.overview\n小说架构: @小说架构.content.content"
+    }
+  )
+#</node>
+
+
+#@node(description="为步骤卡补齐上下文模板")
+architecture_step_context_2 = Card.Update(
+    card_id=architecture_steps.cards[1].id,
+    content_merge={
+      "step": 2,
+      "step_name": "世界观与冲突发生器",
+      "prompt_name": "ANG.M0.architecture_step2_worldview",
+      "ai_context_template": "作品标签: @作品标签.content\n故事大纲: @故事大纲.content.overview\n步骤1结果: @type:小说架构步骤[index=1].content.content"
+    }
+  )
+#</node>
+
+
+#@node(description="为步骤卡补齐上下文模板")
+architecture_step_context_3 = Card.Update(
+    card_id=architecture_steps.cards[2].id,
+    content_merge={
+      "step": 3,
+      "step_name": "情节线与推进机制",
+      "prompt_name": "ANG.M0.architecture_step3_plot",
+      "ai_context_template": "作品标签: @作品标签.content\n故事大纲: @故事大纲.content.overview\n步骤1结果: @type:小说架构步骤[index=1].content.content\n步骤2结果: @type:小说架构步骤[index=2].content.content"
+    }
+  )
+#</node>
+
+
+#@node(description="为步骤卡补齐上下文模板")
+architecture_step_context_4 = Card.Update(
+    card_id=architecture_steps.cards[3].id,
+    content_merge={
+      "step": 4,
+      "step_name": "核心角色规划",
+      "prompt_name": "ANG.M0.architecture_step4_character",
+      "ai_context_template": "作品标签: @作品标签.content\n故事大纲: @故事大纲.content.overview\n步骤1结果: @type:小说架构步骤[index=1].content.content\n步骤2结果: @type:小说架构步骤[index=2].content.content\n步骤3结果: @type:小说架构步骤[index=3].content.content"
+    }
+  )
+#</node>
+
+
+#@node(description="为步骤卡补齐上下文模板")
+architecture_step_context_5 = Card.Update(
+    card_id=architecture_steps.cards[4].id,
+    content_merge={
+      "step": 5,
+      "step_name": "叙事风格与文本策略",
+      "prompt_name": "ANG.M0.architecture_step5_style",
+      "ai_context_template": "作品标签: @作品标签.content\n故事大纲: @故事大纲.content.overview\n步骤1结果: @type:小说架构步骤[index=1].content.content\n步骤2结果: @type:小说架构步骤[index=2].content.content\n步骤3结果: @type:小说架构步骤[index=3].content.content\n步骤4结果: @type:小说架构步骤[index=4].content.content"
+    }
+  )
+#</node>
+
+
+#@node(description="等待步骤上下文写入完成")
+wait_step_contexts = Logic.Wait(tasks=[
+    architecture_step_context_1,
+    architecture_step_context_2,
+    architecture_step_context_3,
+    architecture_step_context_4,
+    architecture_step_context_5
+  ])
+#</node>
+
+
+#@node(description="创建步骤四规划转角色卡开关")
+step4_planning_switch = Card.Create(
+    project_id=trigger.project_id,
+    card_type="通用文本",
+    title="系统开关/步骤四规划转角色卡",
+    content={"content": "true"}
+  )
+#</node>
+
+
+#@node(description="创建步骤二组织卡自动生成开关")
+org_switch = Card.Create(
+    project_id=trigger.project_id,
+    card_type="通用文本",
+    title="ANG.M0/步骤二组织卡自动生成开关",
+    content={"content": "true"}
+  )
+#</node>
+
+
+#@node(description="创建伏笔总台账占位卡")
+foreshadow_total_ledger = Card.Create(
+    project_id=trigger.project_id,
+    card_type="通用文本",
+    title="伏笔管理/总台账",
+    content={"content": ""}
+  )
+#</node>
+
+
+#@node(description="创建前情摘要占位卡")
+story_summary = Card.Create(
+    project_id=trigger.project_id,
+    card_type="通用文本",
+    title="前情摘要",
+    content={"content": ""}
+  )
+#</node>
+
+
+#@node(description="创建伏笔未回收台账占位卡")
+foreshadow_open_ledger = Card.Create(
+    project_id=trigger.project_id,
+    card_type="通用文本",
+    title="伏笔管理/未回收台账",
+    content={"content": ""}
+  )
+#</node>

@@ -22,9 +22,9 @@ new_characters = Logic.Expression(
 #@node(async=true, description="批量创建角色卡（异步）")
 char_cards = Card.BatchUpsert(
     project_id=trigger.project_id,
-    parent_id=trigger.card_id,
     card_type="角色卡",
     title_template="{item.name}",
+    match_by="title",
     items=new_characters.result
   )
 #</node>
@@ -40,9 +40,9 @@ new_scenes = Logic.Expression(
 #@node(async=true, description="批量创建场景卡（异步）")
 scene_cards = Card.BatchUpsert(
     project_id=trigger.project_id,
-    parent_id=trigger.card_id,
     card_type="场景卡",
     title_template="{item.name}",
+    match_by="title",
     items=new_scenes.result
   )
 #</node>

@@ -57,6 +57,9 @@ from . import prompts
 from . import card_types
 from . import workflows
 from . import knowledge
+from . import legacy_title_cleanup
+from . import foreshadow_schema
+from . import step4_migration
 
 __all__ = [
     'initializer',

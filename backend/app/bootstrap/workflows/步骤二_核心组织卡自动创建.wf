@@ -1,0 +1,151 @@
+# 工作流：步骤二完成后自动创建组织卡
+# 功能：小说架构步骤2（世界观与冲突发生器）保存后，从步骤二文本中抽取“核心组织/势力/阵营”，并批量创建组织卡
+# 约束：
+# - 不改动步骤四的提示词与生成结果（本工作流仅监听步骤二）
+# - 不用“合理默认值”掩盖缺参：若无法抽取到组织则直接失败，便于定位
+# - 增强流下的组织卡直接落到项目根级，避免依赖“世界观设定”容器卡
+
+#@node(description="触发器：仅监听步骤2保存（更新）")
+trigger = Trigger.CardSaved(card_type="小说架构步骤", step=2, on_create=False, on_update=True)
+#</node>
+
+
+#@node(description="读取当前步骤卡")
+step_card = Card.Read(card_id=trigger.card_id)
+#</node>
+
+
+#@node(description="计算是否属于步骤2")
+step2_guard = Logic.Expression(
+    expression="int(default((step_card.content or {}).get('step'), 0)) == 2 or str(default(step_card.title, '')).startswith('步骤2：')"
+  )
+#</node>
+
+
+#@node(description="校验必须是步骤2")
+step2_assert = Logic.Assert(
+    condition="step2_guard.result",
+    message="仅步骤2保存时触发组织卡自动创建"
+  )
+#</node>
+
+
+#@node(description="读取开关配置")
+switch_card = Card.Query(
+    project_id=trigger.project_id,
+    card_type="通用文本",
+    title="ANG.M0/步骤二组织卡自动生成开关",
+    limit=1
+  )
+#</node>
+
+
+#@node(description="计算开关是否开启")
+switch_enabled = Logic.Expression(
+    expression="(not switch_card.cards) or str((((switch_card.cards[0].get('content') or {}).get('enabled')) or ((switch_card.cards[0].get('content') or {}).get('content')) or 'true')).strip().lower() in ['1','true','yes','on']"
+  )
+#</node>
+
+
+#@node(description="校验开关开启")
+switch_assert = Logic.Assert(
+    condition="switch_enabled.result",
+    message="步骤二组织卡自动生成已关闭"
+  )
+#</node>
+
+
+#@node(description="确保世界与资产容器卡存在")
+asset_hub = Card.BatchUpsert(
+    project_id=trigger.project_id,
+    card_type="通用文本",
+    title_template="世界与资产",
+    match_by="title",
+    items=[{"title": "世界与资产"}],
+    content_template={"content": ""}
+  )
+#</node>
+
+
+#@node(description="构造组织抽取提示词")
+org_prompt = Logic.Expression(
+    expression="f'''你是长篇网文的世界观策划编辑。请从【步骤二结果】中提取后续创作真正值得单独建卡的长期组织、门派、势力、王朝、学院、商会、宗教、隐秘结社、异族阵营。\n\n提取目标：\n- 优先提取会跨卷反复出现、会影响权力格局或主线冲突的组织。\n- 若步骤二里明确提到多个重要阵营，不要为了保守而漏掉。\n- 通常提取 6 到 12 个；如果文本里明确的重要组织不足 6 个，可以少于 6 个，但不要硬凑。\n\n只输出 JSON 对象，不要解释，不要代码块。JSON 必须严格符合：\n{{\n  \"organizations\": [\n    {{\n      \"name\": \"纯名称\",\n      \"entity_type\": \"organization\",\n      \"life_span\": \"长期\",\n      \"description\": \"2到4句，交代组织定位、来源、主要手段、典型风格或核心规则\",\n      \"influence\": \"2到3句，写清影响范围、核心资源、控制力、渗透领域或社会地位\",\n      \"relationship\": [\"与其他组织或主角阵营的关系句1\", \"关系句2\"]\n    }}\n  ]\n}}\n\n硬约束：\n1) 仅输出一个 JSON 对象。\n2) organizations 至少 1 个，否则视为失败。\n3) name 必须唯一且为纯名称，不得包含括号备注、编号或解释。\n4) relationship 必须是数组，尽量给 2 条；至少 1 条，且必须具体，不要只写空泛的敌对/合作/中立占位句，除非原文信息确实不足。\n5) entity_type 固定为 organization，life_span 固定为 长期。\n6) 不要编造与步骤二结果冲突的信息，但允许在不冲突的前提下把隐含信息补写完整。\n7) 不要提取一次性路人帮派、纯地名、纯职业群体，除非它们被明确写成长期势力。\n\n【步骤二结果】\n{str(default((step_card.content or {}).get('content'), '')).strip()}\n'''"
+  )
+#</node>
+
+
+#@node(description="优先读取步骤二卡自身选择的模型配置")
+step_llm_config = Logic.Expression(
+    expression="((step_card.ai_params or {}).get('llm_config_id')) or ((((step_card.card_type or {}).get('ai_params') or {}).get('llm_config_id'))) or None"
+  )
+#</node>
+
+
+#@node(description="选择模型配置")
+llm = Logic.SelectLLM(
+    llm_config_id="${step_llm_config.result}"
+  )
+#</node>
+
+
+#@node(description="结构化提取组织列表")
+org_extract = AI.StructuredGenerate(
+    llm_config_id=llm.llm_config_id,
+    user_prompt="${org_prompt.result}",
+    response_model_id="OrganizationsExtract",
+    max_retry=2,
+    timeout=120,
+    use_instruction_flow=True,
+    fail_soft=False
+  )
+#</node>
+
+
+#@node(description="取 organizations 列表")
+org_list = Logic.Expression(
+    expression="(org_extract.data or {}).get('organizations') or []"
+  )
+#</node>
+
+
+#@node(description="校验抽取到组织")
+orgs_assert = Logic.Assert(
+    condition="len(org_list.result) > 0",
+    message="步骤二未抽取到有效组织列表"
+  )
+#</node>
+
+
+#@node(description="读取已存在组织卡")
+existing_orgs = Card.Query(
+    project_id=trigger.project_id,
+    card_type="组织卡",
+    limit=200
+  )
+#</node>
+
+
+#@node(description="剔除已存在组织名")
+orgs_to_create = Logic.Expression(
+    expression="[o for o in org_list.result if str(o.get('name') or '').strip() and str(o.get('name') or '').strip() not in set([str(x.get('title') or '').strip() for x in existing_orgs.cards])]"
+  )
+#</node>
+
+
+#@node(description="有新增组织才继续")
+create_assert = Logic.Assert(
+    condition="len(orgs_to_create.result) > 0",
+    message="无新增组织卡需要创建"
+  )
+#</node>
+
+
+#@node(async=true, description="批量创建组织卡（增强流根级资产）")
+upsert_orgs = Card.BatchUpsert(
+    project_id=trigger.project_id,
+    parent_id=asset_hub.cards[0].get('id'),
+    card_type="组织卡",
+    title_template="{item.name}",
+    items=orgs_to_create.result
+  )
+#</node>

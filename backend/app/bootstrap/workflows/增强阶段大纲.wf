@@ -1,0 +1,50 @@
+# 工作流：增强阶段大纲
+# 功能：增强阶段大纲保存时，创建/更新“章节拆解”卡，章节大纲与正文占位改由单独流程生成
+# 触发器：增强阶段大纲卡片保存时自动触发
+
+#@node(description="触发器：监听增强阶段大纲卡片保存")
+trigger = Trigger.CardSaved(card_type="增强阶段大纲")
+#</node>
+
+
+#@node(description="读取增强阶段大纲")
+stage = Card.Read(card_id=trigger.card_id)
+#</node>
+
+
+#@node(description="准备章节拆解卡内容")
+chapter_blueprint_item = Logic.Expression(
+    expression="[{'title': '章节拆解', 'volume_number': int(stage.content.volume_number or 0), 'stage_number': int(stage.content.stage_number or 0), 'reference_chapter': stage.content.reference_chapter, 'suspense_curve': str(((stage.content or {}).get('suspense_curve') or '')), 'foreshadow_plan': str(((stage.content or {}).get('foreshadow_plan') or ''))}] if stage.content.reference_chapter else []"
+  )
+#</node>
+
+
+#@node(description="有章节范围才创建章节拆解卡")
+blueprint_assert = Logic.Assert(
+    condition="len(chapter_blueprint_item.result) > 0",
+    message="阶段章节范围为空，无法创建章节拆解卡"
+  )
+#</node>
+
+
+#@node(async=true, description="创建或更新增强章节拆解卡")
+chapter_blueprint_card = Card.BatchUpsert(
+    project_id=trigger.project_id,
+    parent_id=trigger.card_id,
+    card_type="增强章节拆解",
+    title_template="{item.title}",
+    items=chapter_blueprint_item.result,
+    content_template={
+      "volume_number": "{item.volume_number}",
+      "stage_number": "{item.stage_number}",
+      "reference_chapter": "{item.reference_chapter}",
+      "suspense_curve": "{item.suspense_curve}",
+      "foreshadow_plan": "{item.foreshadow_plan}"
+    }
+  )
+#</node>
+
+
+#@node(description="等待章节拆解卡创建完成")
+wait_result = Logic.Wait(tasks=[chapter_blueprint_card])
+#</node>

@@ -1,0 +1,75 @@
+# 工作流：增强章节拆解
+# 功能：增强章节拆解卡保存时，批量创建增强章节大纲卡和增强章节正文卡
+# 触发器：增强章节拆解卡片保存时自动触发
+
+#@node(description="触发器：监听增强章节拆解卡片保存")
+trigger = Trigger.CardSaved(card_type="增强章节拆解")
+#</node>
+
+
+#@node(description="读取增强章节拆解卡")
+blueprint = Card.Read(card_id=trigger.card_id)
+#</node>
+
+
+#@node(description="读取所属阶段卡")
+stage = Card.Read(card_id=blueprint.parent_id)
+#</node>
+
+
+#@node(description="提取并增强章节大纲列表")
+enriched_outlines = Logic.Expression(
+    expression="[{**outline, 'title': str(outline.get('title') or '').strip(), 'entity_list': (outline.get('entity_list') or []), 'foreshadow_items': (outline.get('foreshadow_items') or []), 'foreshadow_plan_items': normalize_foreshadow_plan((outline.get('foreshadow_plan_items') or outline.get('foreshadow_items') or [])), 'character_motivations': (outline.get('character_motivations') or []), 'volume_number': int(blueprint.content.volume_number or 0), 'stage_number': int(blueprint.content.stage_number or 0)} for outline in blueprint.content.chapter_outline_list or []]"
+  )
+#</node>
+
+
+#@node(description="校验章节号是否完整连续覆盖范围")
+validated_outlines = Logic.Expression(
+    expression="enriched_outlines.result if (blueprint.content.reference_chapter and len(blueprint.content.reference_chapter) == 2 and [int(item.get('chapter_number', -1)) for item in enriched_outlines.result] == list(range(int(blueprint.content.reference_chapter[0]), int(blueprint.content.reference_chapter[1]) + 1))) else []"
+  )
+#</node>
+
+
+#@node(description="确认有可创建的章节大纲")
+validated_assert = Logic.Assert(
+    condition="len(validated_outlines.result) > 0",
+    message="章节拆解结果为空或未完整覆盖 reference_chapter"
+  )
+#</node>
+
+
+#@node(async=true, description="批量创建增强章节大纲卡（异步）")
+outline_cards = Card.BatchUpsert(
+    project_id=trigger.project_id,
+    parent_id=stage.id,
+    card_type="增强章节大纲",
+    title_template="第{item.chapter_number}章 {item.title}",
+    match_by="title",
+    items=validated_outlines.result
+  )
+#</node>
+
+
+#@node(async=true, description="批量创建增强章节正文卡（异步）")
+content_cards = Card.BatchUpsert(
+    project_id=trigger.project_id,
+    parent_id=stage.id,
+    card_type="增强章节正文",
+    title_template="第{item.chapter_number}章 {item.title}",
+    match_by="title",
+    content_template={
+      "volume_number": "{item.volume_number}",
+      "stage_number": "{item.stage_number}",
+      "chapter_number": "{item.chapter_number}",
+      "title": "{item.title}",
+      "entity_list": "{item.entity_list}"
+    },
+    items=validated_outlines.result
+  )
+#</node>
+
+
+#@node(description="等待异步任务完成")
+wait_result = Logic.Wait(tasks=[outline_cards, content_cards])
+#</node>

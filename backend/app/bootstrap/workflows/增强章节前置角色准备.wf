@@ -1,0 +1,149 @@
+# 工作流：增强章节前置角色准备
+# 功能：在草稿生成前，根据当前章节大纲和角色库生成候选角色，并写回章节卡
+# 触发器：无（由前端手动/自动调用）
+
+#@node(description="解析执行项目ID")
+selected_project_id = Logic.Expression(
+    expression="int(default(project_id, 1) or 1)"
+  )
+#</node>
+
+
+#@node(description="解析执行模型ID")
+selected_llm_config_id = Logic.Expression(
+    expression="int(default(llm_config_id, 1) or 1)"
+  )
+#</node>
+
+
+#@node(description="解析目标章节卡ID")
+selected_target_card_id = Logic.Expression(
+    expression="int(default(target_card_id, 0) or 0)"
+  )
+#</node>
+
+
+#@node(description="选择项目")
+project = Logic.SelectProject(project_id=selected_project_id.result, project_name=None)
+#</node>
+
+
+#@node(description="选择模型")
+llm = Logic.SelectLLM(llm_config_id=selected_llm_config_id.result, llm_name=None)
+#</node>
+
+
+#@node(description="读取增强章节正文卡")
+chapter_cards = Card.Query(
+    project_id=project.project_id,
+    card_type="增强章节正文",
+    limit=2000
+  )
+#</node>
+
+
+#@node(description="读取增强章节大纲卡")
+outline_cards = Card.Query(
+    project_id=project.project_id,
+    card_type="增强章节大纲",
+    limit=2000
+  )
+#</node>
+
+
+#@node(description="读取角色卡")
+character_cards = Card.Query(
+    project_id=project.project_id,
+    card_type="角色卡",
+    limit=500
+  )
+#</node>
+
+
+#@node(description="确定目标章节")
+target = Logic.Expression(
+    expression="([c for c in chapter_cards.cards if int(c.get('id') or 0) == int(selected_target_card_id.result)] + [None])[0]"
+  )
+#</node>
+
+
+#@node(description="断言存在目标章节")
+target_assert = Logic.Assert(
+    condition="target.result is not None",
+    message="未找到目标增强章节正文卡"
+  )
+#</node>
+
+
+#@node(description="构建章节角色准备上下文")
+chapter_ctx = Logic.Expression(
+    expression="{'chapter_number': int((target.result.get('content') or {}).get('chapter_number') or 0), 'chapter_title': str((target.result.get('content') or {}).get('title') or target.result.get('title') or ''), 'volume_number': int((target.result.get('content') or {}).get('volume_number') or 1), 'history_chapter_text': str((([c.get('content', {}).get('content') for c in chapter_cards.cards if int(((c.get('content') or {}).get('chapter_number') or 0)) == int((target.result.get('content') or {}).get('chapter_number') or 0) - 1 and str((c.get('content', {}).get('content') or '')).strip()] + [''])[0])), 'current_chapter_blueprint': str((([(c.get('content') or {}) for c in outline_cards.cards if int(((c.get('content') or {}).get('chapter_number') or 0)) == int((target.result.get('content') or {}).get('chapter_number') or 0)] + [{}])[0])), 'next_chapter_blueprint': str((([(c.get('content') or {}) for c in outline_cards.cards if int(((c.get('content') or {}).get('chapter_number') or 0)) == int((target.result.get('content') or {}).get('chapter_number') or 0) + 1] + [{}])[0])), 'setting_characters': '\\n\\n'.join(['角色名：' + str((c.get('content') or {}).get('name') or '') + '\\n其他称谓：' + '、'.join(((c.get('content') or {}).get('aliases') or [])) + '\\n角色权重：' + str((c.get('content') or {}).get('role_weight') or '') + ' ' + str((c.get('content') or {}).get('role_tier') or '') + '\\n角色类型：' + str((c.get('content') or {}).get('role_type') or '') + '\\n身份：' + str((c.get('content') or {}).get('identity') or '') + '\\n角色概述：' + str((c.get('content') or {}).get('description') or '') for c in character_cards.cards if str((c.get('content') or {}).get('name') or '').strip() and str((c.get('content') or {}).get('name') or '') in set(list((target.result.get('content') or {}).get('entity_list') or []))])}"
+  )
+#</node>
+
+
+#@node(description="清洗章节标题")
+chapter_title_clean = Logic.Expression(
+    expression="(str(chapter_ctx.result.chapter_title or '').strip().replace('第' + str(int(chapter_ctx.result.chapter_number)) + '章', '', 1).strip() if str(chapter_ctx.result.chapter_title or '').strip().startswith('第' + str(int(chapter_ctx.result.chapter_number)) + '章') else str(chapter_ctx.result.chapter_title or '').strip()) or '未命名章节'"
+  )
+#</node>
+
+
+#@node(description="标准化章节标题")
+chapter_title_meta = Logic.Expression(
+    expression="{'title': str(chapter_title_clean.result or '未命名章节')}"
+  )
+#</node>
+
+
+#@node(description="整理当前角色数据库摘要")
+character_database_text = Logic.Expression(
+    expression="'\\n\\n'.join(['角色编号：' + str((c.get('content') or {}).get('character_code') or '未编号') + '\\n角色名：' + str((c.get('content') or {}).get('name') or c.get('title') or '') + '\\n其他称谓：' + '、'.join(((c.get('content') or {}).get('aliases') or [])) + '\\n角色类型：' + str((c.get('content') or {}).get('role_type') or '') + '\\n身份：' + str((c.get('content') or {}).get('identity') or '') + '\\n角色概述：' + str((c.get('content') or {}).get('description') or '') for c in character_cards.cards if str((c.get('content') or {}).get('name') or c.get('title') or '').strip()])"
+  )
+#</node>
+
+
+#@node(description="构建章节前角色规划提示词")
+character_planning_user_prompt = Logic.Expression(
+    expression="f'''【章节基本信息】\\n当前卷：第{int(chapter_ctx.result.volume_number)}卷\\n当前章：第{int(chapter_ctx.result.chapter_number)}章《{str(chapter_title_meta.result.title)}》\\n\\n【当前章节目录】\\n{str(chapter_ctx.result.current_chapter_blueprint or '')}\\n\\n【下一章目录】\\n{str(chapter_ctx.result.next_chapter_blueprint or '')}\\n\\n【上一章正文】\\n{str(chapter_ctx.result.history_chapter_text or '')}\\n\\n【已有角色库】\\n{str(character_database_text.result or '无')}\\n\\n【章节预设角色状态】\\n{str(chapter_ctx.result.setting_characters or '无')}'''"
+  )
+#</node>
+
+
+#@node(description="结构化规划本章角色")
+character_planning = AI.StructuredGenerate(
+    llm_config_id=llm.llm_config_id,
+    user_prompt=character_planning_user_prompt.result,
+    response_model_id="ChapterCharacterPlanningResult",
+    context={"selected_existing_names": [], "new_characters": [], "final_character_names": []},
+    prompt_template="增强章节角色规划",
+    max_retry=2,
+    timeout=120,
+    temperature=0.2,
+    use_instruction_flow=True,
+    fail_soft=True
+  )
+#</node>
+
+
+#@node(description="生成章节候选角色写回内容")
+candidate_character_payload = Logic.Expression(
+    expression="build_candidate_character_content_update((target.result.get('content') or {}), (character_planning.data or {}), character_cards.cards)"
+  )
+#</node>
+
+
+#@node(description="写回章节候选角色")
+candidate_character_saved = Card.Update(
+    card_id=target.result.id,
+    content_merge={
+      "entity_list": "$candidate_character_payload.result.entity_list",
+      "candidate_existing_names": "$candidate_character_payload.result.candidate_existing_names",
+      "candidate_characters": "$candidate_character_payload.result.candidate_characters",
+      "candidate_final_character_names": "$candidate_character_payload.result.candidate_final_character_names",
+      "candidate_character_summary": "$candidate_character_payload.result.candidate_character_summary",
+      "candidate_character_status": "$candidate_character_payload.result.candidate_character_status",
+      "candidate_character_prepared_at": "$candidate_character_payload.result.candidate_character_prepared_at"
+    }
+  )
+#</node>

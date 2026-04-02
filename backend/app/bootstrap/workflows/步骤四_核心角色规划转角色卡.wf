@@ -1,0 +1,177 @@
+# 工作流：步骤四核心角色规划转角色卡
+# 功能：小说架构步骤4（核心角色规划）保存后，将规划稿整理为结构化核心角色并批量建卡
+# 触发器：小说架构步骤保存（更新）
+
+#@node(description="触发器：仅监听新版步骤4规划保存")
+trigger = Trigger.CardSaved(
+    card_type="小说架构步骤",
+    step=4,
+    title="步骤4：核心角色规划",
+    prompt_name="ANG.M0.architecture_step4_character",
+    on_create=False,
+    on_update=True
+)
+#</node>
+
+
+#@node(description="读取当前步骤卡")
+step_card = Card.Read(card_id=trigger.card_id)
+#</node>
+
+
+#@node(description="计算是否属于新版步骤4规划稿")
+step4_guard = Logic.Expression(
+    expression="(int(default((step_card.content or {}).get('step'), 0)) == 4 or str(default(step_card.title, '')).startswith('步骤4：')) and (str(default((step_card.content or {}).get('prompt_name'), '')).strip() in ['ANG.M0.architecture_step4_character', '步骤四-核心角色规划'] or str(default((step_card.content or {}).get('step_name'), '')).strip() == '核心角色规划')"
+  )
+#</node>
+
+
+#@node(description="校验必须是新步骤4规划稿")
+step4_assert = Logic.Assert(
+    condition="step4_guard.result",
+    message="仅新版步骤4核心角色规划保存时触发角色卡生成"
+  )
+#</node>
+
+
+#@node(description="读取新版开关配置")
+switch_card = Card.Query(
+    project_id=trigger.project_id,
+    card_type="通用文本",
+    title="系统开关/步骤四规划转角色卡",
+    limit=1
+  )
+#</node>
+
+
+#@node(description="计算新版开关是否开启")
+switch_enabled = Logic.Expression(
+    expression="(not switch_card.cards) or str((((switch_card.cards[0].get('content') or {}).get('enabled')) or ((switch_card.cards[0].get('content') or {}).get('content')) or 'true')).strip().lower() in ['1','true','yes','on']"
+  )
+#</node>
+
+
+#@node(description="校验新版开关开启")
+switch_assert = Logic.Assert(
+    condition="switch_enabled.result",
+    message="步骤四规划转角色卡已关闭"
+  )
+#</node>
+
+
+#@node(description="确保世界与资产容器卡存在")
+asset_hub = Card.BatchUpsert(
+    project_id=trigger.project_id,
+    card_type="通用文本",
+    title_template="世界与资产",
+    match_by="title",
+    items=[{"title": "世界与资产"}],
+    content_template={"content": ""}
+  )
+#</node>
+
+
+#@node(description="加载提示词：步骤四核心角色转角色卡")
+character_prompt = Prompt.Load(
+    prompt_id="步骤四-核心角色转角色卡",
+    variables={
+      "step4_content": "$step_card.content.content"
+    }
+  )
+#</node>
+
+
+#@node(description="优先读取步骤四卡自身选择的模型配置")
+step_llm_config = Logic.Expression(
+    expression="((step_card.ai_params or {}).get('llm_config_id')) or ((((step_card.card_type or {}).get('ai_params') or {}).get('llm_config_id'))) or None"
+  )
+#</node>
+
+
+#@node(description="选择模型配置")
+llm = Logic.SelectLLM(
+    llm_config_id="${step_llm_config.result}"
+  )
+#</node>
+
+
+#@node(description="结构化提取核心角色")
+character_extract = AI.StructuredGenerate(
+    llm_config_id=llm.llm_config_id,
+    user_prompt=character_prompt.text,
+    response_model_id="Step4CharacterExtractResult",
+    max_retry=2,
+    timeout=120,
+    use_instruction_flow=False,
+    fail_soft=False
+  )
+#</node>
+
+
+#@node(description="提取角色列表")
+character_list = Logic.Expression(
+    expression="(character_extract.data or {}).get('character_cards') or []"
+  )
+#</node>
+
+
+#@node(description="校验抽取到核心角色")
+characters_assert = Logic.Assert(
+    condition="len(character_list.result) > 0",
+    message="步骤四规划稿未抽取到有效核心角色"
+  )
+#</node>
+
+
+#@node(description="读取已存在角色卡")
+existing_characters = Card.Query(
+    project_id=trigger.project_id,
+    card_type="角色卡",
+    limit=200
+  )
+#</node>
+
+
+#@node(description="剔除已存在角色名")
+characters_to_create = Logic.Expression(
+    expression="[c for c in character_list.result if str(c.get('name') or '').strip() and str(c.get('name') or '').strip() not in set([str(x.get('title') or '').strip() for x in existing_characters.cards])]"
+  )
+#</node>
+
+
+#@node(description="补齐初始权重与层级")
+characters_to_upsert = Logic.Expression(
+    expression="[{**c, 'role_weight': int(c.get('role_weight') or (98 if c.get('role_type') == '主角' else 75 if c.get('role_type') == '主角团配角' else 70 if c.get('role_type') == '反派' else 35)), 'role_tier': ('背景角色' if int(c.get('role_weight') or (98 if c.get('role_type') == '主角' else 75 if c.get('role_type') == '主角团配角' else 70 if c.get('role_type') == '反派' else 35)) <= 20 else '单元角色' if int(c.get('role_weight') or (98 if c.get('role_type') == '主角' else 75 if c.get('role_type') == '主角团配角' else 70 if c.get('role_type') == '反派' else 35)) <= 40 else '次要配角' if int(c.get('role_weight') or (98 if c.get('role_type') == '主角' else 75 if c.get('role_type') == '主角团配角' else 70 if c.get('role_type') == '反派' else 35)) <= 60 else '关键角色' if int(c.get('role_weight') or (98 if c.get('role_type') == '主角' else 75 if c.get('role_type') == '主角团配角' else 70 if c.get('role_type') == '反派' else 35)) <= 80 else '核心配角' if int(c.get('role_weight') or (98 if c.get('role_type') == '主角' else 75 if c.get('role_type') == '主角团配角' else 70 if c.get('role_type') == '反派' else 35)) <= 95 else '主角级')} for c in characters_to_create.result]"
+  )
+#</node>
+
+
+#@node(description="有新增角色才继续")
+create_assert = Logic.Assert(
+    condition="len(characters_to_upsert.result) > 0",
+    message="无新增核心角色卡需要创建"
+  )
+#</node>
+
+
+#@node(description="批量创建/更新核心角色卡")
+upsert_characters = Card.BatchUpsert(
+    project_id=trigger.project_id,
+    parent_id=asset_hub.cards[0].get('id'),
+    card_type="角色卡",
+    title_template="{item.name}",
+    items=characters_to_upsert.result
+  )
+#</node>
+
+
+#@node(description="为角色卡补齐角色编号")
+sync_character_codes = Data.CharacterRosterSync(
+    project_id=trigger.project_id,
+    parent_id=asset_hub.cards[0].get('id'),
+    data={
+      "existing_matches": [],
+      "new_characters": []
+    }
+  )
+#</node>
