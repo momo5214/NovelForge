@@ -1,4 +1,5 @@
 import os, sys
+os.environ.setdefault("PYDANTIC_DISABLE_PLUGINS", "__all__")
 from dotenv import load_dotenv
 
 def _load_env_from_nearby():
