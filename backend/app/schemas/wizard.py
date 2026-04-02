@@ -1,5 +1,5 @@
-from pydantic import BaseModel, Field, model_validator
-from typing import Literal, Optional, List, Tuple, Any, Union
+from pydantic import BaseModel, Field, field_validator, model_validator
+from typing import Literal, Optional, List, Tuple, Any, Union, Dict
 
 from .entity import CharacterCard as CharacterCard  # 以完整角色卡替换简化模型
 from .entity import SceneCard as SceneCard
@@ -13,6 +13,27 @@ class Text(BaseModel):
     '''
     content: str = Field(description="任意文本内容，需使用/转换为markdown格式文本")
 
+
+class OrganizationExtractItem(BaseModel):
+    """步骤二：从世界观/冲突文本中抽取的核心组织条目。"""
+
+    name: str = Field(min_length=1, description="纯名称（唯一），不得包含括号/备注")
+    entity_type: Literal["organization"] = Field("organization", description="固定为 organization")
+    life_span: Literal["长期"] = Field("长期", description="固定为 长期")
+    description: str = Field(min_length=1, description="一句话概述该组织定位/来源/手段")
+    influence: str = Field(default="", description="影响范围/资源/控制力（可为空字符串）")
+    relationship: List[str] = Field(min_length=1, description="与其他组织的关系短句列表（至少 1 条）")
+
+
+class OrganizationsExtract(BaseModel):
+    """步骤二：核心组织抽取结果。"""
+
+    organizations: List[OrganizationExtractItem] = Field(
+        min_length=1,
+        max_length=12,
+        description="跨卷长期存在的重要组织列表（不超过 12 个）",
+    )
+
 # --- Schemas for Tags ---
 
 class Tags(BaseModel):
@@ -24,6 +45,9 @@ class Tags(BaseModel):
     narrative_person: Literal['第一人称', '第三人称'] = Field(default='第三人称', description="写作人称（第一人称/第三人称）")
     story_tags: List[Tuple[str, Literal['低权重', '中权重', '高权重']]] = Field(default=[], description="类别标签及权重档位（低/中/高）")
     affection: str = Field(default="", description="情感关系标签")
+    total_chapters: int = Field(default=60, ge=1, description="小说总章数")
+    volume_count: int = Field(default=3, ge=1, description="小说总卷数")
+    chapter_word_count: int = Field(default=3000, ge=100, description="每章目标字数")
 
 
 class SpecialAbility(BaseModel):
@@ -96,6 +120,221 @@ class Blueprint(BaseModel):
     scene_cards: List[SceneCard] = Field(description="主要地图/场景/副本卡片列表，仅在此生成跨卷长期影响的核心地图/场景。注意与organization_cards联系，例如某个地图是某个组织/势力的活动范围则需要标明。")
 
 
+class Step4CharacterExtractCard(BaseModel):
+    """步骤四角色抽取专用模型，强制输出轻档案卡关键信息。"""
+
+    name: str = Field(min_length=1, description="角色姓名，必须为纯名称且唯一。")
+    entity_type: Literal["character"] = Field("character", description="固定为 character")
+    life_span: Literal["长期"] = Field("长期", description="固定为 长期")
+    role_type: Literal['主角','主角团配角','普通NPC','反派'] = Field(description="角色定位。")
+    aliases: List[str] = Field(default_factory=list, description="角色其他称谓，仅保留稳定有效的别称、尊称、化名。")
+    role_weight: int = Field(ge=1, le=100, description="角色初始权重，按当前故事阶段的重要性给出 1-100。")
+    gender: str = Field(min_length=1, description="角色性别。")
+    age: str = Field(min_length=1, description="角色年龄或年龄段。")
+    appearance: str = Field(min_length=1, description="外貌特征与识别点。")
+    identity: str = Field(min_length=1, description="职业、身份或社会定位。")
+    born_scene: str = Field(min_length=1, description="首次出场或常驻场景。")
+    first_volume: int = Field(ge=1, description="首次登场分卷。")
+    first_event: str = Field(min_length=1, description="首次登场事件。")
+    story_function: str = Field(min_length=1, description="该角色在故事中的叙事功能。")
+    description: str = Field(min_length=1, description="角色概述。")
+    background: str = Field(min_length=1, description="角色背景、成长经历或出身概述。")
+    personality: str = Field(min_length=1, description="性格关键词或性格描述。")
+    core_drive: str = Field(min_length=1, description="核心驱动力/目标。")
+    inner_conflict: str = Field(min_length=1, description="角色内在矛盾或心理拉扯。")
+    relationship_summary: str = Field(min_length=1, description="与关键角色的关系摘要。")
+    character_arc: str = Field(min_length=1, description="角色在全书的弧光或阶段变化。")
+    dynamic_info: Dict[str, List[Any]] = Field(default_factory=dict, description="固定输出空对象 {}。")
+
+
+class Step4CharacterExtractBlueprint(BaseModel):
+    """步骤四角色抽取包装模型。"""
+
+    volume_count: int = Field(description="总卷数。")
+    character_thinking: str = Field(min_length=1, description="角色设计思考。")
+    character_cards: List[Step4CharacterExtractCard] = Field(min_length=1, max_length=8, description="步骤四抽取出的核心角色列表。")
+    scene_thinking: str = Field(default="", description="占位字段。")
+    scene_cards: List[Any] = Field(default_factory=list, description="占位字段，固定为空数组。")
+
+
+class Step4CharacterExtractResult(BaseModel):
+    """步骤四角色抽取最小结果模型。"""
+
+    character_cards: List[Step4CharacterExtractCard] = Field(
+        min_length=1,
+        max_length=8,
+        description="从步骤四正文中提取出的核心角色轻档案卡列表。"
+    )
+
+
+def _normalize_string_list(value: Any) -> List[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        text = value.strip()
+        return [text] if text else []
+    if isinstance(value, (list, tuple, set)):
+        result: List[str] = []
+        seen: set[str] = set()
+        for item in value:
+            text = str(item or "").strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            result.append(text)
+        return result
+    text = str(value).strip()
+    return [text] if text else []
+
+
+def _normalize_dynamic_info_map(value: Any) -> Dict[str, List[Any]]:
+    if not isinstance(value, dict):
+        return {}
+    normalized: Dict[str, List[Any]] = {}
+    for key, raw_items in value.items():
+        key_text = str(key or "").strip()
+        if not key_text:
+            continue
+        if raw_items is None:
+            normalized[key_text] = []
+        elif isinstance(raw_items, list):
+            normalized[key_text] = raw_items
+        elif isinstance(raw_items, tuple):
+            normalized[key_text] = list(raw_items)
+        else:
+            normalized[key_text] = [raw_items]
+    return normalized
+
+
+def _normalize_role_weight(value: Any) -> Optional[int]:
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        return 100 if value else None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number <= 0:
+        return None
+    if number <= 1:
+        number *= 100
+    normalized = int(round(number))
+    return max(1, min(100, normalized))
+
+
+class CharacterRecognitionHit(BaseModel):
+    """章节中命中的已有角色。"""
+
+    observed_name: str = Field(min_length=1, description="正文中实际出现的称呼或名字。")
+    matched_name: str = Field(min_length=1, description="匹配到的现有角色卡名称。")
+    aliases: List[str] = Field(default_factory=list, description="本章额外确认的别称、尊称或化名。")
+
+    @field_validator("aliases", mode="before")
+    @classmethod
+    def _normalize_aliases(cls, value: Any) -> List[str]:
+        return _normalize_string_list(value)
+
+
+class DiscoveredCharacterCard(BaseModel):
+    """章节后自动补建的新角色轻档案。"""
+
+    name: str = Field(min_length=1, description="角色姓名，必须为纯名称且唯一。")
+    entity_type: Literal["character"] = Field("character", description="固定为 character")
+    life_span: Literal["长期", "短期"] = Field("短期", description="角色生命周期。")
+    role_type: Literal['主角','主角团配角','普通NPC','反派'] = Field(description="角色定位。")
+    aliases: List[str] = Field(default_factory=list, description="角色其他称谓。")
+    role_weight: Optional[int] = Field(default=None, ge=1, le=100, description="角色权重。")
+    gender: str = Field(default="", description="角色性别。")
+    age: str = Field(default="", description="角色年龄或年龄段。")
+    appearance: str = Field(default="", description="外貌特征与识别点。")
+    identity: str = Field(default="", description="职业、身份或社会定位。")
+    born_scene: str = Field(default="", description="首次出场或常驻场景。")
+    first_volume: int = Field(ge=1, description="首次登场分卷。")
+    first_event: str = Field(default="", description="首次登场事件。")
+    story_function: str = Field(default="", description="该角色在故事中的叙事功能。")
+    description: str = Field(default="", description="角色概述。")
+    background: str = Field(default="", description="角色背景、成长经历或出身概述。")
+    personality: str = Field(default="", description="性格关键词或性格描述。")
+    core_drive: str = Field(default="", description="核心驱动力/目标。")
+    inner_conflict: str = Field(default="", description="角色内在矛盾或心理拉扯。")
+    relationship_summary: str = Field(default="", description="与关键角色的关系摘要。")
+    character_arc: str = Field(default="", description="角色在全书的弧光或阶段变化。")
+    dynamic_info: Dict[str, List[Any]] = Field(default_factory=dict, description="固定输出空对象 {}。")
+
+    @field_validator("aliases", mode="before")
+    @classmethod
+    def _normalize_aliases(cls, value: Any) -> List[str]:
+        return _normalize_string_list(value)
+
+    @field_validator("dynamic_info", mode="before")
+    @classmethod
+    def _normalize_dynamic_info(cls, value: Any) -> Dict[str, List[Any]]:
+        return _normalize_dynamic_info_map(value)
+
+    @field_validator("role_weight", mode="before")
+    @classmethod
+    def _normalize_role_weight_field(cls, value: Any) -> Optional[int]:
+        return _normalize_role_weight(value)
+
+
+class ChapterCharacterDiscoveryResult(BaseModel):
+    """章节角色识别与新角色补建结果。"""
+
+    existing_matches: List[CharacterRecognitionHit] = Field(
+        default_factory=list,
+        description="根据正文命中的已有角色及其别称归并结果。"
+    )
+    new_characters: List[DiscoveredCharacterCard] = Field(
+        default_factory=list,
+        description="需要新建角色卡的轻档案列表。"
+    )
+
+
+class ChapterCharacterPlanningResult(BaseModel):
+    """章节正文生成前的角色规划结果。"""
+
+    selected_existing_names: List[str] = Field(
+        default_factory=list,
+        description="本章确定要出场的已有角色名称，必须来自现有角色库标准名。"
+    )
+    new_characters: List[DiscoveredCharacterCard] = Field(
+        default_factory=list,
+        description="正文生成前需要先补建的新角色轻档案。"
+    )
+    final_character_names: List[str] = Field(
+        default_factory=list,
+        description="本章最终角色名单，仅包含角色，不包含场景或组织。"
+    )
+
+
+class ChapterCandidateCharacterSet(BaseModel):
+    """章节级候选角色集合。"""
+
+    selected_existing_names: List[str] = Field(
+        default_factory=list,
+        description="章节已确认要使用的正式角色标准名。"
+    )
+    new_characters: List[DiscoveredCharacterCard] = Field(
+        default_factory=list,
+        description="章节草稿阶段待确认的新角色轻档案。"
+    )
+    final_character_names: List[str] = Field(
+        default_factory=list,
+        description="本章最终参与角色名单，供章节草稿生成直接使用。"
+    )
+    status: Literal["pending", "confirmed"] = Field(
+        default="pending",
+        description="候选角色当前状态。"
+    )
+    updated_at: Optional[str] = Field(default=None, description="最近一次生成候选角色的时间。")
+    confirmed_at: Optional[str] = Field(default=None, description="确认建卡时间。")
+    confirmed_names: List[str] = Field(
+        default_factory=list,
+        description="本次确认转正的新角色名称列表。"
+    )
+
+
 # === Step 4: Volume Outline Schemas===
 
 class CharacterAction(BaseModel):
@@ -108,6 +347,25 @@ class StoryLine(BaseModel):
     story_type: Literal['主线', '辅线'] = Field(description="故事线类型")
     name: str = Field(description="用一个简单的名称表示该线")
     overview: str = Field(description="故事线内容概述，需要详略得当，涉及到的所有场景、角色等元素都应在这个概述中体现到。")
+
+
+class EnhancedCharacterAction(BaseModel):
+    """增强流程分卷大纲中的角色行动条目。"""
+    name: str = Field(description="角色名称")
+    description: str = Field(
+        min_length=80,
+        description="用卷级执行稿的密度说明该角色在本卷的任务、关键行动、转折变化，以及这些行动如何作用于主线、支线或人物关系。"
+    )
+
+
+class EnhancedStoryLine(BaseModel):
+    """增强流程分卷大纲中的故事线条目。"""
+    story_type: Literal['主线', '辅线'] = Field(description="故事线类型")
+    name: str = Field(description="故事线名称，避免空泛命名")
+    overview: str = Field(
+        min_length=120,
+        description="以卷级执行稿标准说明这条线的起点、推进过程、关键阻碍、与主线或角色发展的关系，以及本卷结束时达到的阶段性结果。"
+    )
 
 
 class VolumeOutline(BaseModel):
@@ -125,6 +383,29 @@ class VolumeOutline(BaseModel):
     stage_count:int=Field(description="预期该卷的阶段剧情，将该卷的剧情分为n个阶段来叙述，通常为4~6个")
     character_action_list: Optional[List[CharacterAction]] = Field( description="根据卷内设计，概述关键角色实体的行动与变化")
     entity_snapshot: Optional[List[str]] = Field(description="卷末时，关键实体（角色为主）快照状态信息，，包括等级/修为境界、财富、功法等准确信息，以便收束剧情")
+
+
+class EnhancedVolumeOutline(VolumeOutline):
+    """增强流程专用分卷大纲。"""
+
+    main_target: EnhancedStoryLine = Field(description="本卷主线目标，需写清目标、推进路径、关键阻碍和完成标准，达到可以直接拆阶段的厚度")
+    branch_line: Optional[List[EnhancedStoryLine]] = Field(default=None, description="本卷重要支线，建议 1-3 条；每条都要写清服务对象、推进过程和阶段性结果，避免一句话带过")
+    character_action_list: Optional[List[EnhancedCharacterAction]] = Field(default=None, description="卷内关键角色的任务与行动变化；每条都要说明其对主线、支线或人物关系造成的具体影响")
+    volume_title: Optional[str] = Field(default=None, description="本卷卷名")
+    volume_theme: Optional[str] = Field(default=None, description="本卷的核心主题")
+    plot_milestone: Optional[str] = Field(default=None, min_length=120, description="本卷结束时必须达成的不可逆情节里程碑，要写清事情如何发生、改变了什么、为何不可回退")
+    worldview_evolution: Optional[str] = Field(default=None, min_length=120, description="本卷重点揭示或改变的世界观方面，既要说明揭示内容，也要说明它如何改变后续冲突或人物处境")
+    ending_hook: Optional[str] = Field(default=None, min_length=80, description="卷末用于牵引下一卷的悬念或钩子，要写清引爆点、未解问题和下一卷牵引力")
+    core_setting_expansion: Optional[str] = Field(default=None, min_length=120, description="本卷重点展开的世界设定，要求足够具体，能够直接为阶段设计和章节事件提供素材")
+    core_conflict: Optional[str] = Field(default=None, min_length=120, description="本卷围绕展开的核心冲突，要写清对抗双方、冲突来源、升级路径与代价")
+    suspense_clues: Optional[List[str]] = Field(default=None, description="本卷埋下或推进的悬念线索")
+    protagonist_progress: Optional[str] = Field(default=None, min_length=150, description="主角在本卷中的起点状态、关键历程与终点状态，要体现阶段推进、关键选择和成长代价")
+    protagonist_team_dynamic: Optional[str] = Field(default=None, min_length=120, description="主角团在本卷中的整体状态、任务与协作关系，要写出关系变化、分工冲突和协作结果")
+    key_character_arcs: Optional[List[str]] = Field(default=None, description="本卷重点推进的核心角色弧光")
+    chapter_range: Optional[str] = Field(default=None, description="本卷建议覆盖的章节范围，如：第1章-第20章")
+    emotional_tone: Optional[str] = Field(default=None, min_length=40, description="本卷核心情绪基调，需说明情绪主色、阶段变化与读者体验")
+    narrative_perspective: Optional[str] = Field(default=None, min_length=40, description="本卷主要叙事视角策略，需说明主视角安排及其服务的悬念或人物效果")
+    signature_scenes: Optional[List[str]] = Field(default=None, description="本卷的标志性场景或名场面")
 
 class WritingGuide(BaseModel):
     """
@@ -145,7 +426,50 @@ class ChapterOutline(BaseModel):
         description="章节中出场的重要实体列表，只能从上下文提供的组织/角色/场景卡实体中选择，不得新增、自创；实体名称必须是纯名称（不得包含括号/备注）。注意,为了精简上下文，避免实体列表中出现该章节未出场的冗余实体",
     )
 
-    
+
+class ForeshadowPlanItem(BaseModel):
+    """增强章节大纲中的结构化伏笔计划条目。"""
+
+    foreshadow_id: str = Field(description="伏笔稳定编号，例如 MF001 / YF003")
+    display_title: str = Field(description="伏笔标题或简短名称")
+    foreshadow_type: str = Field(default="other", description="伏笔类型：goal|item|person|other")
+    action: str = Field(default="", description="本章动作，例如埋设、强化、触发、回收")
+    description: str = Field(default="", description="本章对该伏笔的具体安排或说明")
+    due_chapter_number: Optional[int] = Field(default=None, description="建议最晚回收章节")
+    raw_text: str = Field(default="", description="原始伏笔条目文本，便于兼容旧链路")
+
+
+class EnhancedChapterOutline(BaseModel):
+    """增强流程专用章节大纲，贴近章节目录蓝图样式。"""
+
+    volume_number: int = Field(description="卷号，如果没有找到，则设置为0")
+    stage_number: int = Field(description="该章节属于第几个阶段，从1开始")
+    title: str = Field(description="章节标题正文，不带“第X章”前缀")
+    chapter_number: int = Field(description="章节序号")
+    chapter_position: str = Field(description="本章定位：对主线、支线或角色发展的具体贡献")
+    core_function: str = Field(description="本章核心作用：推动情节、揭示信息、塑造角色或渲染氛围")
+    narrative_perspective: str = Field(description="本章叙事视角安排")
+    scene_time: str = Field(description="本章主要时间设定")
+    scene_location: str = Field(description="本章主要地点与关键环境特征")
+    atmosphere: str = Field(description="本章整体氛围")
+    character_motivations: List[str] = Field(description="出场角色与本章动机/初始状态")
+    plot_start: str = Field(description="情节脉络-起：开端事件")
+    plot_develop: str = Field(description="情节脉络-承：发展与升级")
+    plot_twist: str = Field(description="情节脉络-转：转折点")
+    plot_end: str = Field(description="情节脉络-合：结局与下钩子")
+    suspense_type: str = Field(description="本章悬念类型")
+    emotion_curve: str = Field(description="本章情绪演变路径")
+    foreshadow_items: List[str] = Field(default_factory=list, description="本章涉及的伏笔条目")
+    foreshadow_plan_items: List[ForeshadowPlanItem] = Field(
+        default_factory=list,
+        description="结构化伏笔计划条目，推荐包含 foreshadow_id、display_title、action、description、due_chapter_number；旧流程可为空。",
+    )
+    reversal_index: str = Field(description="颠覆指数与颠覆源，例如：Lv.3（颠覆源：误认真凶）")
+    overview: str = Field(description="本章简述，用于快速预览与后续正文扩写", min_length=100)
+    entity_list: List[str] = Field(
+        description="章节中出场的重要实体列表，只能从上下文提供的组织/角色/场景卡实体中选择，不得新增、自创；实体名称必须是纯名称（不得包含括号/备注）。",
+    )
+
 
 class StageLine(BaseModel):
     """故事按阶段划分的信息"""
@@ -176,6 +500,57 @@ class StageLine(BaseModel):
         return self
 
 
+class EnhancedStageLine(BaseModel):
+    """增强流程专用阶段任务书。"""
+
+    volume_number: int = Field(description="该故事阶段属于第几卷")
+    stage_number: int = Field(description="该故事阶段是第几个阶段，从1开始")
+    stage_name: str = Field(description="阶段名称或一句话概括")
+    reference_chapter: Tuple[int, int] = Field(description="该阶段负责覆盖的章节范围，例如 [1,4]")
+    analysis: Optional[str] = Field(
+        description="以作者视角说明本阶段为什么这样设计：阶段目标、主线推进幅度、辅线穿插方式、冲突来源、转折安排与下一阶段钩子。"
+    )
+    overview: Optional[str] = Field(
+        description="该阶段剧情的完整概述，需要写清起点局面、推进过程、关键事件链、角色关系变化、阶段结果与悬念。"
+    )
+    entity_snapshot: Optional[List[str]] = Field(
+        description="阶段末时关键实体（角色为主）的快照状态信息，用于保证本阶段收束到明确状态。"
+    )
+
+
+class EnhancedChapterBlueprint(BaseModel):
+    """增强流程专用章节拆解结果。"""
+
+    volume_number: int = Field(description="卷号")
+    stage_number: int = Field(description="阶段号")
+    reference_chapter: Tuple[int, int] = Field(description="本次连续拆解覆盖的章节范围")
+    suspense_curve: Optional[str] = Field(
+        default=None,
+        description="本阶段内部的悬念节奏说明，概括本批章节如何递进、转折与收束。"
+    )
+    foreshadow_plan: Optional[str] = Field(
+        default=None,
+        description="本阶段章节中的伏笔触发/强化/回收计划摘要，可为空。"
+    )
+    chapter_outline_list: List[EnhancedChapterOutline] = Field(
+        description="根据阶段任务书连续生成的章节大纲列表，必须完整覆盖 reference_chapter。"
+    )
+
+    @model_validator(mode="after")
+    def validate_chapter_outline_coverage(self):
+        start, end = self.reference_chapter
+        if start > end:
+            raise ValueError("reference_chapter start must be <= end")
+
+        actual_numbers = [item.chapter_number for item in self.chapter_outline_list]
+        expected_numbers = list(range(start, end + 1))
+        if actual_numbers != expected_numbers:
+            raise ValueError(
+                "chapter_outline_list.chapter_number must be contiguous and fully cover reference_chapter"
+            )
+        return self
+
+
 # === Step 6: Batch Chapter Outline Schemas===
 
 class Chapter(BaseModel):
@@ -187,6 +562,13 @@ class Chapter(BaseModel):
     entity_list: List[str] = Field(
         description="章节中参与的重要实体列表，只能从提供的实体中选择；name 必须是纯名称（不得包含括号/备注）",
     )
+    candidate_existing_names: List[str] = Field(default_factory=list, description="章节草稿阶段已匹配到的正式角色标准名。")
+    candidate_characters: List[DiscoveredCharacterCard] = Field(default_factory=list, description="章节草稿阶段待确认的新角色候选。")
+    candidate_final_character_names: List[str] = Field(default_factory=list, description="本章草稿阶段最终参与角色名单。")
+    candidate_character_summary: str = Field(default="", description="候选角色轻档案摘要文本，供草稿生成使用。")
+    candidate_character_status: Literal["pending", "confirmed"] = Field(default="confirmed", description="章节候选角色状态。")
+    candidate_character_prepared_at: Optional[str] = Field(default=None, description="最近一次候选角色准备时间。")
+    candidate_character_confirmed_at: Optional[str] = Field(default=None, description="候选角色转正确认时间。")
     content:Optional[str]=Field(default="",description="章节正文内容")
     
 

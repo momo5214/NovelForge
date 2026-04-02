@@ -16,9 +16,15 @@ class SuggestResponse(BaseModel):
 
 class ForeshadowRegisterItem(BaseModel):
 	title: str
+	foreshadow_id: Optional[str] = None
+	display_title: Optional[str] = None
 	type: str = Field('other', description='goal|item|person|other')
 	note: Optional[str] = None
 	chapter_id: Optional[int] = None
+	status: Optional[str] = Field('open', description='open|resolved')
+	due_chapter_number: Optional[int] = None
+	first_chapter_number: Optional[int] = None
+	last_chapter_number: Optional[int] = None
 
 class ForeshadowRegisterRequest(BaseModel):
 	project_id: int

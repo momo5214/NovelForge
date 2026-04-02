@@ -6,9 +6,9 @@
 import os
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 from pydantic_settings import BaseSettings
-from pydantic import Field
+from pydantic import Field, field_validator
 
 
 class DatabaseSettings(BaseSettings):
@@ -98,22 +98,46 @@ class Neo4jSettings(BaseSettings):
 
 class BootstrapSettings(BaseSettings):
     """启动初始化配置"""
-    
+
     # 是否覆盖更新内置数据（提示词、知识库等）
     overwrite: bool = Field(default=True, alias="BOOTSTRAP_OVERWRITE")
-    
+
+    # 是否启用外部提示词定义导入（如 AI_NovelGenerator/prompt_definitions.py）
+    enable_external_prompt_import: bool = Field(
+        default=False,
+        alias="BOOTSTRAP_ENABLE_EXTERNAL_PROMPT_IMPORT",
+    )
+
+    # 外部提示词定义文件路径（留空时使用内置默认路径）
+    external_prompt_definitions_path: str = Field(
+        default="",
+        alias="BOOTSTRAP_EXTERNAL_PROMPT_DEFINITIONS_PATH",
+    )
+
+    # 外部导入提示词命名空间前缀（避免与现有提示词重名）
+    external_prompt_namespace: str = Field(
+        default="ANG.M0",
+        alias="BOOTSTRAP_EXTERNAL_PROMPT_NAMESPACE",
+    )
+
+    # 外部导入严格模式：True 时导入失败会中断启动
+    external_prompt_strict: bool = Field(
+        default=False,
+        alias="BOOTSTRAP_EXTERNAL_PROMPT_STRICT",
+    )
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
         case_sensitive = False
         extra = "ignore"  # 忽略额外字段
-    
+
     @property
     def should_overwrite(self) -> bool:
         """是否应该覆盖更新
-        
+
         支持多种格式：true/false, 1/0, yes/no, on/off
-        
+
         Returns:
             是否覆盖
         """
@@ -152,6 +176,17 @@ class AppSettings(BaseSettings):
     
     # CORS允许的源
     cors_origins: str = Field(default="*", alias="CORS_ORIGINS")
+
+    @field_validator("debug", mode="before")
+    @classmethod
+    def _normalize_debug(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"release", "prod", "production"}:
+                return False
+            if normalized in {"debug", "dev", "development"}:
+                return True
+        return value
     
     class Config:
         env_file = ".env"

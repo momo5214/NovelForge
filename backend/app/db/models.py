@@ -136,10 +136,15 @@ class ForeshadowItem(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     project_id: int = Field(foreign_key="project.id")
     chapter_id: Optional[int] = Field(default=None)  # 章节卡片ID或章节ID
+    foreshadow_id: Optional[str] = Field(default=None, index=True)
     title: str
+    display_title: Optional[str] = Field(default=None)
     type: str = Field(default='other', index=True)  # goal | item | person | other
     note: Optional[str] = None
     status: str = Field(default='open', index=True)  # open | resolved
+    due_chapter_number: Optional[int] = Field(default=None)
+    first_chapter_number: Optional[int] = Field(default=None)
+    last_chapter_number: Optional[int] = Field(default=None)
     created_at: datetime = Field(default_factory=datetime.now, nullable=False)
     resolved_at: Optional[datetime] = None
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field
 from app.schemas.relation_extract import RelationExtraction
-from app.schemas.entity import UpdateDynamicInfo
+from app.schemas.entity import UpdateDynamicInfo, UpdateCharacterState
 
 class ParticipantTyped(BaseModel):
     name: str
@@ -80,3 +80,22 @@ class UpdateDynamicInfoRequest(BaseModel):
 class UpdateDynamicInfoResponse(BaseModel):
 	success: bool
 	updated_card_count: int 
+
+
+class ExtractCharacterStateRequest(BaseModel):
+	project_id: Optional[int] = None
+	text: str
+	participants: Optional[List[ParticipantTyped]] = None
+	llm_config_id: int = 1
+	timeout: Optional[float] = None
+	extra_context: Optional[str] = None
+
+
+class UpdateCharacterStateRequest(BaseModel):
+	project_id: int
+	data: UpdateCharacterState
+
+
+class UpdateCharacterStateResponse(BaseModel):
+	success: bool
+	updated_card_count: int
