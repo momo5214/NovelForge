@@ -10,6 +10,7 @@
     6.保持与章节整体内容的一致性和连贯性。
 
 - knowledge:
+    - @KB{ name=风格范文 }
     - @KB{ name=文风约束 }
 
 - Constrict

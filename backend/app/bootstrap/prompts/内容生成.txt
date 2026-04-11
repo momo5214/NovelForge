@@ -34,6 +34,7 @@
 
 
 - knowledge:
+    - @KB{ name=风格范文 }
     - @KB{ name=文风约束 }
 
 ---
