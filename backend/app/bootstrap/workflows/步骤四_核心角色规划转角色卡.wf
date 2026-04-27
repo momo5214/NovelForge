@@ -21,7 +21,7 @@ step_card = Card.Read(card_id=trigger.card_id)
 
 #@node(description="计算是否属于新版步骤4规划稿")
 step4_guard = Logic.Expression(
-    expression="(int(default((step_card.content or {}).get('step'), 0)) == 4 or str(default(step_card.title, '')).startswith('步骤4：')) and (str(default((step_card.content or {}).get('prompt_name'), '')).strip() in ['ANG.M0.architecture_step4_character', '步骤四-核心角色规划'] or str(default((step_card.content or {}).get('step_name'), '')).strip() == '核心角色规划')"
+    expression="(int(default((step_card.content or {}).get('step'), 0)) == 4 or str(default(step_card.title, '')).startswith('步骤4：')) and (str(default((step_card.content or {}).get('prompt_name'), '')).strip() == '步骤四-核心角色规划' or str(default((step_card.content or {}).get('step_name'), '')).strip() == '核心角色规划')"
   )
 #</node>
 

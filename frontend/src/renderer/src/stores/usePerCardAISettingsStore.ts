@@ -22,7 +22,7 @@ export const CARD_TYPE_AI_PRESETS: Record<string, PerCardAIParams> = {
   '章节正文': { prompt_name: '内容生成', temperature: 0.7, max_tokens: 8192, timeout: 60 },
   '增强章节正文': { prompt_name: '增强章节正文草稿-续写版', temperature: 0.7, max_tokens: 8192, timeout: 60 },
   '小说架构': { prompt_name: '一段话大纲', response_model_name: 'ParagraphOverview', temperature: 0.7, max_tokens: 8192, timeout: 120 },
-  '小说架构步骤': { prompt_name: 'ANG.M0.architecture_step1_mission', temperature: 0.7, max_tokens: 4096, timeout: 120 },
+  '小说架构步骤': { prompt_name: '步骤一-分卷使命宣言', temperature: 0.7, max_tokens: 4096, timeout: 120 },
 }
 
 export function getPresetForCardType(typeName?: string): PerCardAIParams {

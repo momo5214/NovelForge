@@ -99,10 +99,10 @@ def migrate_step4_cards(session: Session) -> None:
         )
         updated_count += 1
 
-    old_switch_cards = session.exec(select(Card).where(Card.title == "ANG.M0/步骤四角色卡自动生成开关")).all()
+    old_switch_cards = session.exec(select(Card).where(Card.title == "系统开关/步骤四自动生成角色卡")).all()
     if old_switch_cards:
         session.exec(
-            sql_delete(Card).where(Card.title == "ANG.M0/步骤四角色卡自动生成开关")
+            sql_delete(Card).where(Card.title == "系统开关/步骤四自动生成角色卡")
         )
 
     if updated_count or old_switch_cards:

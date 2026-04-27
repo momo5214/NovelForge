@@ -1,5 +1,5 @@
 # 工作流：ANG_M2一致性审校
-# 功能：对 ANG.M0 章节草稿执行一致性审校，生成审校报告卡
+# 功能：对章节正文草稿执行一致性审校，生成审校报告卡
 # 触发器：无（手动执行）
 
 #@node(description="选择项目")
@@ -68,7 +68,7 @@ review_cards = Card.Query(
 
 #@node(description="确定待审校章节")
 target = Logic.Expression(
-    expression="([pair[1] for pair in sorted([(int(((c.get('content') or {}).get('chapter_number') or 10**9)), c) for c in chapter_cards.cards]) if str(((pair[1].get('content') or {}).get('content') or '')).strip() and not any([(((r.get('title') or '').startswith('ANG.M2/一致性审校报告-第' + str(int(((pair[1].get('content') or {}).get('chapter_number') or 0))) + '章')) or (((r.get('title') or '').startswith('一致性审校-第' + str(int(((pair[1].get('content') or {}).get('chapter_number') or 0))) + '章')))) for r in review_cards.cards])] + [None])[0]"
+    expression="([pair[1] for pair in sorted([(int(((c.get('content') or {}).get('chapter_number') or 10**9)), c) for c in chapter_cards.cards]) if str(((pair[1].get('content') or {}).get('content') or '')).strip() and not any([(((r.get('title') or '').startswith('一致性审校-第' + str(int(((pair[1].get('content') or {}).get('chapter_number') or 0))) + '章')))) for r in review_cards.cards])] + [None])[0]"
   )
 #</node>
 
@@ -90,7 +90,7 @@ previous_plot_points = Logic.Expression(
 
 #@node(description="构建审校上下文")
 review_context = Logic.Expression(
-    expression="{'chapter_number': int((target.result.get('content') or {}).get('chapter_number') or 0), 'chapter_title': str((target.result.get('content') or {}).get('title') or target.result.get('title') or ''), 'volume_number': int((target.result.get('content') or {}).get('volume_number') or 1), 'chapter_text': str((target.result.get('content') or {}).get('content') or ''), 'chapter_blueprint': str((([c.get('content', {}).get('overview') for c in chapter_outline_cards.cards if int(((c.get('content') or {}).get('chapter_number') or 0)) == int((target.result.get('content') or {}).get('chapter_number') or 0)] + [''])[0])), 'next_chapter_blueprint': str((([c.get('content', {}).get('overview') for c in chapter_outline_cards.cards if int(((c.get('content') or {}).get('chapter_number') or 0)) == int((target.result.get('content') or {}).get('chapter_number') or 0) + 1] + [''])[0])), 'volume_outline': str((([c.get('content', {}).get('overview') for c in volume_cards.cards if int((c.get('content') or {}).get('volume_number') or -1) == int((target.result.get('content') or {}).get('volume_number') or 1)] + [''])[0])), 'global_summary': str((([str((c.get('content') or {}).get('content') or '').strip() for c in review_cards.cards if (c.get('title') or '') == '前情摘要' and str((c.get('content') or {}).get('content') or '').strip()] + [''])[0])), 'previous_plot_points': str(previous_plot_points.result or ''), 'foreshadow_ledger': str((([str((c.get('content') or {}).get('content') or '').strip() for c in review_cards.cards if (((c.get('title') or '').startswith('伏笔管理/未回收台账')) or ((c.get('title') or '').startswith('ANG.M2/伏笔台账-未回收'))) and str((c.get('content') or {}).get('content') or '').strip()] + [''])[0]))}"
+    expression="{'chapter_number': int((target.result.get('content') or {}).get('chapter_number') or 0), 'chapter_title': str((target.result.get('content') or {}).get('title') or target.result.get('title') or ''), 'volume_number': int((target.result.get('content') or {}).get('volume_number') or 1), 'chapter_text': str((target.result.get('content') or {}).get('content') or ''), 'chapter_blueprint': str((([c.get('content', {}).get('overview') for c in chapter_outline_cards.cards if int(((c.get('content') or {}).get('chapter_number') or 0)) == int((target.result.get('content') or {}).get('chapter_number') or 0)] + [''])[0])), 'next_chapter_blueprint': str((([c.get('content', {}).get('overview') for c in chapter_outline_cards.cards if int(((c.get('content') or {}).get('chapter_number') or 0)) == int((target.result.get('content') or {}).get('chapter_number') or 0) + 1] + [''])[0])), 'volume_outline': str((([c.get('content', {}).get('overview') for c in volume_cards.cards if int((c.get('content') or {}).get('volume_number') or -1) == int((target.result.get('content') or {}).get('volume_number') or 1)] + [''])[0])), 'global_summary': str((([str((c.get('content') or {}).get('content') or '').strip() for c in review_cards.cards if (c.get('title') or '') == '前情摘要' and str((c.get('content') or {}).get('content') or '').strip()] + [''])[0])), 'previous_plot_points': str(previous_plot_points.result or ''), 'foreshadow_ledger': str((([str((c.get('content') or {}).get('content') or '').strip() for c in review_cards.cards if (((c.get('title') or '').startswith('伏笔管理/未回收台账'))) and str((c.get('content') or {}).get('content') or '').strip()] + [''])[0]))}"
   )
 #</node>
 

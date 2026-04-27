@@ -1143,7 +1143,6 @@ function findCurrentChapterReviewCard(): CardRead | null {
 		.filter((card: any) => {
 			const title = String(card?.title || '')
 			return title.startsWith(`一致性审校-第${meta.chapterNumber}章-`)
-				|| title.startsWith(`ANG.M2/一致性审校报告-第${meta.chapterNumber}章`)
 		})
 		.sort((a: any, b: any) => new Date(String(b?.created_at || 0)).getTime() - new Date(String(a?.created_at || 0)).getTime())
 	return matches[0] || null

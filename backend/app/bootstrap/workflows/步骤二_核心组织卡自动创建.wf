@@ -34,7 +34,7 @@ step2_assert = Logic.Assert(
 switch_card = Card.Query(
     project_id=trigger.project_id,
     card_type="通用文本",
-    title="ANG.M0/步骤二组织卡自动生成开关",
+    title="系统开关/步骤二自动生成组织卡",
     limit=1
   )
 #</node>

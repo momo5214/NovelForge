@@ -69,52 +69,7 @@ const visible = ref(false)
 const aiOptions = ref<AIConfigOptions | null>(null)
 const editing = ref<PerCardAIParams>({})
 
-const PROMPT_DISPLAY_MAP: Record<string, { name: string; description: string }> = {
-	'ANG.M0.architecture_step1_mission': {
-		name: 'M0 架构步骤1：分卷使命宣言',
-		description: '为整部作品定义分卷战略目标与卷级使命。',
-	},
-	'ANG.M0.architecture_step2_worldview': {
-		name: 'M0 架构步骤2：世界观与冲突发生器',
-		description: '构建世界规则并生成推动剧情的核心冲突。',
-	},
-	'ANG.M0.architecture_step3_plot': {
-		name: 'M0 架构步骤3：情节线与推进机制',
-		description: '设计主线/支线与关键推进节点。',
-	},
-	'ANG.M0.architecture_step4_character': {
-		name: '步骤四：核心角色规划',
-		description: '生成服务后续角色建卡的角色规划稿。',
-	},
-	'ANG.M0.architecture_step5_style': {
-		name: 'M0 架构步骤5：叙事风格与文本策略',
-		description: '确定叙事口吻、节奏与语言风格约束。',
-	},
-	'ANG.M0.volume_design_format': {
-		name: 'M0 分卷格式模板',
-		description: '分卷输出的标准结构模板。',
-	},
-	'ANG.M0.volume_outline': {
-		name: 'M0 首卷分卷大纲',
-		description: '生成首卷的卷级剧情与章节级推进方案。',
-	},
-	'ANG.M0.subsequent_volume': {
-		name: 'M0 中间卷分卷大纲',
-		description: '生成中间卷递进结构与承接关系。',
-	},
-	'ANG.M0.final_volume': {
-		name: 'M0 终卷收束大纲',
-		description: '生成终卷收束路径与主线回收方案。',
-	},
-	'ANG.M0.chapter_blueprint': {
-		name: 'M0 章节目录蓝图',
-		description: '将卷级结构拆解为章节目录与每章目标。',
-	},
-	'ANG.M0.chapter_draft': {
-		name: 'M0 章节正文草稿',
-		description: '根据章节蓝图生成正文草稿。',
-	},
-}
+const PROMPT_DISPLAY_MAP: Record<string, { name: string; description: string }> = {}
 
 function getPromptOptionLabel(prompt: { name: string; description?: string | null }): string {
 	const mapped = PROMPT_DISPLAY_MAP[prompt.name]

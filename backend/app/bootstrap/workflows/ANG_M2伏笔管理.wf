@@ -41,7 +41,7 @@ text_cards = Card.Query(
 
 #@node(description="确定待处理伏笔章节")
 target = Logic.Expression(
-    expression="([pair[1] for pair in sorted([(int(((c.get('content') or {}).get('chapter_number') or 10**9)), c) for c in chapter_cards.cards]) if str(((pair[1].get('content') or {}).get('content') or '')).strip() and any([(((t.get('title') or '').startswith('ANG.M2/一致性审校报告-第' + str(int(((pair[1].get('content') or {}).get('chapter_number') or 0))) + '章')) or (((t.get('title') or '').startswith('一致性审校-第' + str(int(((pair[1].get('content') or {}).get('chapter_number') or 0))) + '章')))) for t in text_cards.cards]) and not any([(((t.get('title') or '').startswith('ANG.M2/伏笔治理报告-第' + str(int(((pair[1].get('content') or {}).get('chapter_number') or 0))) + '章')) or (((t.get('title') or '').startswith('伏笔治理-第' + str(int(((pair[1].get('content') or {}).get('chapter_number') or 0))) + '章')))) for t in text_cards.cards])] + [None])[0]"
+    expression="([pair[1] for pair in sorted([(int(((c.get('content') or {}).get('chapter_number') or 10**9)), c) for c in chapter_cards.cards]) if str(((pair[1].get('content') or {}).get('content') or '')).strip() and any([(((t.get('title') or '').startswith('一致性审校-第' + str(int(((pair[1].get('content') or {}).get('chapter_number') or 0))) + '章'))) for t in text_cards.cards]) and not any([(((t.get('title') or '').startswith('伏笔治理-第' + str(int(((pair[1].get('content') or {}).get('chapter_number') or 0))) + '章'))) for t in text_cards.cards])] + [None])[0]"
   )
 #</node>
 
@@ -56,7 +56,7 @@ target_assert = Logic.Assert(
 
 #@node(description="提取伏笔处理上下文")
 foreshadow_context = Logic.Expression(
-    expression="{'chapter_number': int((target.result.get('content') or {}).get('chapter_number') or 0), 'chapter_title': str((target.result.get('content') or {}).get('title') or target.result.get('title') or ''), 'chapter_blueprint': str((([c.get('content', {}).get('overview') for c in chapter_outline_cards.cards if int(((c.get('content') or {}).get('chapter_number') or 0)) == int((target.result.get('content') or {}).get('chapter_number') or 0)] + [''])[0])), 'chapter_text': str((target.result.get('content') or {}).get('content') or ''), 'existing_ledger': str((([str((c.get('content') or {}).get('content') or '').strip() for c in text_cards.cards if (((c.get('title') or '').startswith('伏笔管理/未回收台账')) or ((c.get('title') or '').startswith('ANG.M2/伏笔台账-未回收'))) and str((c.get('content') or {}).get('content') or '').strip()] + [''])[0]))}"
+    expression="{'chapter_number': int((target.result.get('content') or {}).get('chapter_number') or 0), 'chapter_title': str((target.result.get('content') or {}).get('title') or target.result.get('title') or ''), 'chapter_blueprint': str((([c.get('content', {}).get('overview') for c in chapter_outline_cards.cards if int(((c.get('content') or {}).get('chapter_number') or 0)) == int((target.result.get('content') or {}).get('chapter_number') or 0)] + [''])[0])), 'chapter_text': str((target.result.get('content') or {}).get('content') or ''), 'existing_ledger': str((([str((c.get('content') or {}).get('content') or '').strip() for c in text_cards.cards if (((c.get('title') or '').startswith('伏笔管理/未回收台账'))) and str((c.get('content') or {}).get('content') or '').strip()] + [''])[0]))}"
   )
 #</node>
 
@@ -91,14 +91,14 @@ foreshadow_vars = Logic.Expression(
 
 #@node(description="读取伏笔总台账快照")
 foreshadow_total_ledger_snapshot = Logic.Expression(
-    expression="str((([str((c.get('content') or {}).get('content') or '').strip() for c in text_cards.cards if ((c.get('title') or '') == '伏笔管理/总台账') or ((c.get('title') or '') == 'ANG.M2/伏笔总台账')] + [''])[0]))"
+    expression="str((([str((c.get('content') or {}).get('content') or '').strip() for c in text_cards.cards if ((c.get('title') or '') == '伏笔管理/总台账')] + [''])[0]))"
   )
 #</node>
 
 
 #@node(description="汇总历史伏笔治理报告")
 foreshadow_history_reports = Logic.Expression(
-    expression="'\\n\\n'.join([str((c.get('title') or '')).strip() + '\\n' + str((c.get('content') or {}).get('content') or '').strip() for c in text_cards.cards if (((c.get('title') or '').startswith('伏笔治理-第')) or ((c.get('title') or '').startswith('ANG.M2/伏笔治理报告-第'))) and str((c.get('content') or {}).get('content') or '').strip()])"
+    expression="'\\n\\n'.join([str((c.get('title') or '')).strip() + '\\n' + str((c.get('content') or {}).get('content') or '').strip() for c in text_cards.cards if (((c.get('title') or '').startswith('伏笔治理-第'))) and str((c.get('content') or {}).get('content') or '').strip()])"
   )
 #</node>
 

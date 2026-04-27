@@ -6,10 +6,10 @@ class ArchitectureStep4PromptRoutingTests(unittest.TestCase):
     def test_architecture_prompt_detection_accepts_step4_legacy_and_canonical_names(self):
         from app.api.endpoints.ai import is_architecture_prompt_template
 
-        # 旧版 ANG.M0 前缀仍应识别
-        self.assertTrue(is_architecture_prompt_template("ANG.M0.architecture_step1_mission"))
-        self.assertTrue(is_architecture_prompt_template("ANG.M0.architecture_step4_character"))
-        # 新版本地名称
+        # ANG.M0 前缀已移除，不再识别
+        self.assertFalse(is_architecture_prompt_template("ANG.M0.architecture_step1_mission"))
+        self.assertFalse(is_architecture_prompt_template("ANG.M0.architecture_step4_character"))
+        # 本地名称
         self.assertTrue(is_architecture_prompt_template("步骤一-分卷使命宣言"))
         self.assertTrue(is_architecture_prompt_template("步骤四-核心角色规划"))
         self.assertTrue(is_architecture_prompt_template("步骤五-叙事风格与文本策略"))

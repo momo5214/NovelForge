@@ -42,10 +42,6 @@ def _get_llm_service():
 # 响应模型映射表（内置）
 from app.schemas.response_registry import RESPONSE_MODEL_MAP
 
-_ARCH_STEP_PROMPT_PREFIX = "ANG.M0.architecture_step"
-_ARCH_LEGACY_PROMPT_NAMES = {
-    "步骤四-核心角色规划",
-}
 _ARCH_LOCAL_PROMPT_NAMES = {
     "步骤一-分卷使命宣言",
     "步骤二-世界观与冲突发生器",
@@ -339,7 +335,7 @@ def is_architecture_prompt_template(prompt_template: str | None) -> bool:
     prompt_name = str(prompt_template or "").strip()
     if not prompt_name:
         return False
-    return prompt_name.startswith(_ARCH_STEP_PROMPT_PREFIX) or prompt_name in _ARCH_LEGACY_PROMPT_NAMES or prompt_name in _ARCH_LOCAL_PROMPT_NAMES
+    return prompt_name in _ARCH_LOCAL_PROMPT_NAMES
 
 
 def _build_generic_prompt_variables(
