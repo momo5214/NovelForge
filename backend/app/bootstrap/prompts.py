@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 
 from loguru import logger
-from sqlmodel import Session, select
+from sqlmodel import Session, delete as sql_delete, select
 
 from app.core.config import settings
 from app.db.models import Prompt
@@ -73,6 +73,13 @@ def init_prompts(session: Session) -> None:
         session: 数据库会话
     """
     overwrite = settings.bootstrap.should_overwrite
+
+    # 清理已废弃的 ANG.M0 外部提示词（这些提示词不再由系统管理）
+    deleted = session.exec(sql_delete(Prompt).where(Prompt.name.like("ANG.M0.%")))
+    if deleted.rowcount:
+        session.commit()
+        logger.info(f"已删除 {deleted.rowcount} 个废弃的 ANG.M0 提示词")
+
     existing_prompts = session.exec(select(Prompt)).all()
     existing_names = {p.name for p in existing_prompts}
     existing_by_name = {p.name: p for p in existing_prompts}
