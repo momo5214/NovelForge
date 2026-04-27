@@ -80,13 +80,13 @@ def migrate_step4_cards(session: Session) -> None:
 
         content["step"] = 4
         content["step_name"] = "核心角色规划"
-        content["prompt_name"] = "ANG.M0.architecture_step4_character"
+        content["prompt_name"] = "步骤四-核心角色规划"
         content["ai_context_template"] = STEP4_CONTEXT_TEMPLATE
 
         if ai_params:
-            ai_params["prompt_name"] = "ANG.M0.architecture_step4_character"
+            ai_params["prompt_name"] = "步骤四-核心角色规划"
         else:
-            ai_params = {"prompt_name": "ANG.M0.architecture_step4_character"}
+            ai_params = {"prompt_name": "步骤四-核心角色规划"}
 
         session.exec(
             sql_update(Card)

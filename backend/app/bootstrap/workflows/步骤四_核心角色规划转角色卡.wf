@@ -7,7 +7,7 @@ trigger = Trigger.CardSaved(
     card_type="小说架构步骤",
     step=4,
     title="步骤4：核心角色规划",
-    prompt_name="ANG.M0.architecture_step4_character",
+    prompt_name="步骤四-核心角色规划",
     on_create=False,
     on_update=True
 )

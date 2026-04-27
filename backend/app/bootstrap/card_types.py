@@ -658,7 +658,7 @@ def create_default_card_types(session: Session) -> None:
         "增强章节正文": {"prompt_name": "增强章节正文草稿-续写版", "temperature": 0.7, "max_tokens": 8192, "timeout": 120},
         "章节正文": {"prompt_name": "内容生成", "temperature": 0.7, "max_tokens": 8192, "timeout": 120},
         "小说架构": {"prompt_name": "一段话大纲", "temperature": 0.7, "max_tokens": 8192, "timeout": 120},
-        "小说架构步骤": {"prompt_name": "ANG.M0.architecture_step1_mission", "temperature": 0.7, "max_tokens": 4096, "timeout": 120},
+        "小说架构步骤": {"prompt_name": "步骤一-分卷使命宣言", "temperature": 0.7, "max_tokens": 4096, "timeout": 120},
         "角色卡": {"prompt_name": "角色动态信息提取", "temperature": 0.6, "max_tokens": 4096, "timeout": 120},
         "场景卡": {"prompt_name": "内容生成", "temperature": 0.6, "max_tokens": 4096, "timeout": 120},
         "组织卡": {"prompt_name": "关系提取", "temperature": 0.6, "max_tokens": 4096, "timeout": 120},

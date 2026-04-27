@@ -15,11 +15,11 @@ logger = logging.getLogger(__name__)
 
 
 ARCHITECTURE_STEP_PROMPTS: dict[int, str] = {
-    1: "ANG.M0.architecture_step1_mission",
-    2: "ANG.M0.architecture_step2_worldview",
-    3: "ANG.M0.architecture_step3_plot",
-    4: "ANG.M0.architecture_step4_character",
-    5: "ANG.M0.architecture_step5_style",
+    1: "步骤一-分卷使命宣言",
+    2: "步骤二-世界观与冲突发生器",
+    3: "步骤三-情节线与推进机制",
+    4: "步骤四-核心角色规划",
+    5: "步骤五-叙事风格与文本策略",
 }
 
 ARCHITECTURE_STEP_NAMES: dict[int, str] = {

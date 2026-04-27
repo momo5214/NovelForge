@@ -79,11 +79,11 @@ architecture_steps = Card.BatchUpsert(
     card_type="小说架构步骤",
     title_template="步骤{item.step}：{item.name}",
     items=[
-      {"step": 1, "name": "分卷使命宣言", "prompt_name": "ANG.M0.architecture_step1_mission", "content": ""},
-      {"step": 2, "name": "世界观与冲突发生器", "prompt_name": "ANG.M0.architecture_step2_worldview", "content": ""},
-      {"step": 3, "name": "情节线与推进机制", "prompt_name": "ANG.M0.architecture_step3_plot", "content": ""},
-      {"step": 4, "name": "核心角色规划", "prompt_name": "ANG.M0.architecture_step4_character", "content": ""},
-      {"step": 5, "name": "叙事风格与文本策略", "prompt_name": "ANG.M0.architecture_step5_style", "content": ""}
+      {"step": 1, "name": "分卷使命宣言", "prompt_name": "步骤一-分卷使命宣言", "content": ""},
+      {"step": 2, "name": "世界观与冲突发生器", "prompt_name": "步骤二-世界观与冲突发生器", "content": ""},
+      {"step": 3, "name": "情节线与推进机制", "prompt_name": "步骤三-情节线与推进机制", "content": ""},
+      {"step": 4, "name": "核心角色规划", "prompt_name": "步骤四-核心角色规划", "content": ""},
+      {"step": 5, "name": "叙事风格与文本策略", "prompt_name": "步骤五-叙事风格与文本策略", "content": ""}
     ],
     content_template={
       "content": "{item.content}",
@@ -101,7 +101,7 @@ architecture_step_context_1 = Card.Update(
     content_merge={
       "step": 1,
       "step_name": "分卷使命宣言",
-      "prompt_name": "ANG.M0.architecture_step1_mission",
+      "prompt_name": "步骤一-分卷使命宣言",
       "ai_context_template": "作品标签: @作品标签.content\n故事大纲: @故事大纲.content.overview\n小说架构: @小说架构.content.content"
     }
   )
@@ -114,7 +114,7 @@ architecture_step_context_2 = Card.Update(
     content_merge={
       "step": 2,
       "step_name": "世界观与冲突发生器",
-      "prompt_name": "ANG.M0.architecture_step2_worldview",
+      "prompt_name": "步骤二-世界观与冲突发生器",
       "ai_context_template": "作品标签: @作品标签.content\n故事大纲: @故事大纲.content.overview\n步骤1结果: @type:小说架构步骤[index=1].content.content"
     }
   )
@@ -127,7 +127,7 @@ architecture_step_context_3 = Card.Update(
     content_merge={
       "step": 3,
       "step_name": "情节线与推进机制",
-      "prompt_name": "ANG.M0.architecture_step3_plot",
+      "prompt_name": "步骤三-情节线与推进机制",
       "ai_context_template": "作品标签: @作品标签.content\n故事大纲: @故事大纲.content.overview\n步骤1结果: @type:小说架构步骤[index=1].content.content\n步骤2结果: @type:小说架构步骤[index=2].content.content"
     }
   )
@@ -140,7 +140,7 @@ architecture_step_context_4 = Card.Update(
     content_merge={
       "step": 4,
       "step_name": "核心角色规划",
-      "prompt_name": "ANG.M0.architecture_step4_character",
+      "prompt_name": "步骤四-核心角色规划",
       "ai_context_template": "作品标签: @作品标签.content\n故事大纲: @故事大纲.content.overview\n步骤1结果: @type:小说架构步骤[index=1].content.content\n步骤2结果: @type:小说架构步骤[index=2].content.content\n步骤3结果: @type:小说架构步骤[index=3].content.content"
     }
   )
@@ -153,7 +153,7 @@ architecture_step_context_5 = Card.Update(
     content_merge={
       "step": 5,
       "step_name": "叙事风格与文本策略",
-      "prompt_name": "ANG.M0.architecture_step5_style",
+      "prompt_name": "步骤五-叙事风格与文本策略",
       "ai_context_template": "作品标签: @作品标签.content\n故事大纲: @故事大纲.content.overview\n步骤1结果: @type:小说架构步骤[index=1].content.content\n步骤2结果: @type:小说架构步骤[index=2].content.content\n步骤3结果: @type:小说架构步骤[index=3].content.content\n步骤4结果: @type:小说架构步骤[index=4].content.content"
     }
   )

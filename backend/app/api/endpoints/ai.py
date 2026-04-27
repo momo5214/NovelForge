@@ -46,6 +46,13 @@ _ARCH_STEP_PROMPT_PREFIX = "ANG.M0.architecture_step"
 _ARCH_LEGACY_PROMPT_NAMES = {
     "步骤四-核心角色规划",
 }
+_ARCH_LOCAL_PROMPT_NAMES = {
+    "步骤一-分卷使命宣言",
+    "步骤二-世界观与冲突发生器",
+    "步骤三-情节线与推进机制",
+    "步骤四-核心角色规划",
+    "步骤五-叙事风格与文本策略",
+}
 _ARCH_STEP_TEMPLATE_VAR_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 _GENERIC_TEMPLATE_VAR_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 _FACTS_SECTION_PATTERN = re.compile(r"【事实子图】\n(?P<content>.*?)(?=(?:\n\n【)|\Z)", flags=re.S)
@@ -332,7 +339,7 @@ def is_architecture_prompt_template(prompt_template: str | None) -> bool:
     prompt_name = str(prompt_template or "").strip()
     if not prompt_name:
         return False
-    return prompt_name.startswith(_ARCH_STEP_PROMPT_PREFIX) or prompt_name in _ARCH_LEGACY_PROMPT_NAMES
+    return prompt_name.startswith(_ARCH_STEP_PROMPT_PREFIX) or prompt_name in _ARCH_LEGACY_PROMPT_NAMES or prompt_name in _ARCH_LOCAL_PROMPT_NAMES
 
 
 def _build_generic_prompt_variables(
